@@ -41,7 +41,7 @@ web:
 
 upload:
   max_file_mb: 50
-  allowed_ext: [.pdf, .docx, .md, .markdown, .txt, .csv, .xlsx]
+  allowed_ext: [.pdf, .docx, .pptx, .html, .htm, .md, .markdown, .txt, .csv, .xlsx]
 
 ratelimit:
   ask_per_min: 30

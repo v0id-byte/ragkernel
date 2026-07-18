@@ -75,3 +75,10 @@ ragkernel/
   webapp.py static/index.html                          # 上传 + 带引用聊天 + 记录处理结果 + 仪表盘
 config/settings.yaml                                   # provider / 检索 / 上传 / 垂直层 配置
 ```
+
+## 致谢 / Acknowledgments
+
+- **[MarkItDown](https://github.com/microsoft/markitdown)**（Microsoft，MIT License）—— PDF / Word / PPT / HTML → Markdown 的文档转换。
+- **[BAAI bge-m3 / bge-reranker-v2-m3](https://huggingface.co/BAAI)** —— 本地向量与重排模型。
+- **[sqlite-vec](https://github.com/asg017/sqlite-vec)** —— SQLite 向量检索扩展。
+- **[jieba](https://github.com/fxsjy/jieba)** —— 中文分词。

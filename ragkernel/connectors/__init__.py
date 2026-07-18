@@ -2,9 +2,10 @@
 
 from pathlib import Path
 
-from . import docx, markdown, pdf, table, text
+from . import markdown, richdoc, table, text
 
-_MODULES = (pdf, docx, markdown, text, table)
+# richdoc（MarkItDown）接管 pdf/docx/pptx/html；pdf.py/docx.py 仍在，作为其回退（不单独登记）。
+_MODULES = (richdoc, markdown, text, table)
 _REGISTRY: dict[str, object] = {}
 for _mod in _MODULES:
     for _ext in _mod.EXTS:
