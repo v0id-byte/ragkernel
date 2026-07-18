@@ -1,0 +1,43 @@
+# ragkernel 配置（无个人路径/tier；单租户 MVP）
+
+data_dir: data
+
+# LLM provider —— provider 无关，一行 base_url 切换。
+# 默认 MiniMax（零成本，开箱即用）。切官方 Claude：base_url 留空 + model: claude-sonnet-5 +
+#   api_key_env: ANTHROPIC_API_KEY（合同/法律等高风险垂直建议用更强模型）。
+provider:
+  base_url: "https://api.minimaxi.com/anthropic"
+  model: "MiniMax-M3"
+  api_key_env: MINIMAX_API_KEY
+  max_tokens: 8000
+
+embed:
+  model: BAAI/bge-m3
+
+retrieval:
+  rerank:
+    enabled: true
+    model: BAAI/bge-reranker-v2-m3
+    candidates: 40
+  restore_window: 4    # 命中 chunk 后，前后各补多少个同文档 chunk 还原上下文
+
+chunking:
+  min_chars: 200
+  max_chars: 3000
+
+# 可插拔垂直层：none = NullVertical（本期只做空实现）。
+vertical: none
+
+web:
+  host: 127.0.0.1
+  port: 8360
+
+upload:
+  max_file_mb: 50
+  allowed_ext: [.pdf, .docx, .md, .markdown, .txt]
+
+ratelimit:
+  ask_per_min: 30
+  session_per_min: 20
+  upload_per_min: 20
+  max_question_chars: 2000

@@ -1,0 +1,25 @@
+# 傻瓜式起服务：docker compose -f docker/docker-compose.yml up
+# 首启会下载 ~2GB 模型到 models 卷；之后秒起。数据（DB+上传件）持久化到 ./_data。
+services:
+  ragkernel:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8360:8360"
+    environment:
+      - RAGKERNEL_HOST=0.0.0.0
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - MINIMAX_API_KEY=${MINIMAX_API_KEY:-}
+    volumes:
+      - models:/models          # 模型缓存（首启下载后复用）
+      - ./_data:/app/data       # SQLite 库 + 上传件持久化
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8360/health').status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
+
+volumes:
+  models:

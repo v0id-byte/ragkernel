@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ragkernel · 企业知识库</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --panel: #ffffff; --fg: #1c2128; --dim: #6e7681; --line: #e2e5e9;
+    --accent: #2f6feb; --accent-soft: #e8f0fe; --green: #1a7f37; --red: #cf222e; --amber: #9a6700;
+    --chip: #eef1f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --panel: #161b22; --fg: #c9d1d9; --dim: #8b949e; --line: #30363d;
+      --accent: #58a6ff; --accent-soft: #12233f; --green: #3fb950; --red: #f85149; --amber: #d29922;
+      --chip: #21262d;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 14px/1.6 -apple-system, "SF Pro Text", "PingFang SC", "Segoe UI", Roboto, sans-serif;
+    display: flex; flex-direction: column; height: 100vh;
+  }
+  header {
+    padding: 12px 20px; border-bottom: 1px solid var(--line); background: var(--panel);
+    display: flex; align-items: baseline; gap: 10px; flex-shrink: 0;
+  }
+  header b { font-size: 15px; }
+  header .sub { color: var(--dim); font-size: 12px; }
+  #main { flex: 1; display: flex; min-height: 0; }
+
+  /* 左：文档面板 */
+  #docs {
+    width: 300px; border-right: 1px solid var(--line); background: var(--panel);
+    display: flex; flex-direction: column; flex-shrink: 0;
+  }
+  #docs .hd { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; }
+  #docs .hd span { font-weight: 600; }
+  #drop {
+    margin: 12px 16px; padding: 18px; border: 1.5px dashed var(--line); border-radius: 10px;
+    text-align: center; color: var(--dim); cursor: pointer; transition: .15s; font-size: 13px;
+  }
+  #drop:hover, #drop.over { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+  #doclist { flex: 1; overflow-y: auto; padding: 0 8px 12px; }
+  .doc { padding: 9px 10px; border-radius: 8px; display: flex; gap: 8px; align-items: flex-start; }
+  .doc:hover { background: var(--bg); }
+  .doc.hl { background: var(--accent-soft); }
+  .doc .body { flex: 1; min-width: 0; }
+  .doc .name { font-weight: 500; word-break: break-all; }
+  .doc .meta { color: var(--dim); font-size: 12px; margin-top: 2px; }
+  .doc .st-embedded { color: var(--green); }
+  .doc .st-chunked, .doc .st-pending { color: var(--amber); }
+  .doc .st-failed { color: var(--red); }
+  .doc .del { color: var(--dim); cursor: pointer; padding: 0 4px; border-radius: 4px; visibility: hidden; }
+  .doc:hover .del { visibility: visible; }
+  .doc .del:hover { color: var(--red); background: var(--bg); }
+  #upprog { padding: 4px 16px; color: var(--dim); font-size: 12px; white-space: pre-wrap; }
+
+  /* 右：对话 */
+  #chat { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #log { flex: 1; overflow-y: auto; padding: 22px 26px; }
+  .turn { max-width: 820px; margin: 0 auto 22px; }
+  .q { font-weight: 600; margin-bottom: 8px; }
+  .q::before { content: "❯ "; color: var(--accent); }
+  .a { white-space: pre-wrap; word-break: break-word; }
+  .trace { color: var(--dim); font-size: 12px; margin: 4px 0; font-family: "SF Mono", Menlo, monospace; }
+  .cites { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .cite {
+    font: 12px "SF Mono", Menlo, monospace; background: var(--chip); color: var(--fg);
+    padding: 3px 8px; border-radius: 6px; cursor: pointer; border: 1px solid var(--line);
+  }
+  .cite:hover { border-color: var(--accent); color: var(--accent); }
+  .thinking { color: var(--dim); }
+  .err { color: var(--red); }
+  .hint { color: var(--dim); max-width: 820px; margin: 0 auto; }
+  #bar { border-top: 1px solid var(--line); background: var(--panel); padding: 12px 26px; }
+  #bar form { max-width: 820px; margin: 0 auto; display: flex; gap: 10px; }
+  #in {
+    flex: 1; background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px 12px; color: var(--fg); font: inherit; outline: none;
+  }
+  #in:focus { border-color: var(--accent); }
+  #send { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 0 18px; cursor: pointer; font: inherit; font-weight: 600; }
+  #send:disabled { opacity: .5; cursor: default; }
+  body.busy #in, body.busy #send { opacity: .6; pointer-events: none; }
+  @media (max-width: 720px) { #docs { display: none; } }
+</style>
+</head>
+<body>
+<header>
+  <b>ragkernel</b><span class="sub">企业知识库 · 本地检索 · 带引用问答</span>
+</header>
+<div id="main">
+  <aside id="docs">
+    <div class="hd"><span>文档</span><span class="sub" id="doccount"></span></div>
+    <div id="drop">拖拽文件到此，或点击选择<br><span class="sub">PDF · DOCX · MD · TXT，自动索引</span></div>
+    <input type="file" id="file" hidden>
+    <div id="upprog"></div>
+    <div id="doclist"></div>
+  </aside>
+  <section id="chat">
+    <div id="log"></div>
+    <div id="bar">
+      <form id="form" action="javascript:void 0">
+        <input id="in" autocomplete="off" autofocus placeholder="向知识库提问……答案会附条款级引用" spellcheck="false">
+        <button id="send" type="submit">提问</button>
+      </form>
+    </div>
+  </section>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+const log = $('#log'), input = $('#in'), drop = $('#drop'), fileInput = $('#file');
+let session = null, busy = false;
+const esc = s => (s || '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+function scrollDown() { log.scrollTop = log.scrollHeight; }
+
+async function readSSE(resp, onEvent) {
+  const reader = resp.body.getReader(), dec = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf('\n\n')) >= 0) {
+      const line = buf.slice(0, i); buf = buf.slice(i + 2);
+      if (line.startsWith('data: ')) onEvent(JSON.parse(line.slice(6)));
+    }
+  }
+}
+
+function fp() {
+  const b = [navigator.userAgent, navigator.language, screen.width + 'x' + screen.height].join('|');
+  let h = 5381; for (let i = 0; i < b.length; i++) h = ((h << 5) + h + b.charCodeAt(i)) >>> 0;
+  return h.toString(16).padStart(8, '0');
+}
+
+async function boot() {
+  const r = await fetch('/api/session', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fingerprint: fp() })
+  });
+  session = await r.json();
+  await loadDocs();
+  const hint = document.createElement('div');
+  hint.className = 'hint';
+  hint.innerHTML = '上传文档后即可提问。答案只依据文档内容，并附 <code>[D&lt;文档&gt;#&lt;块&gt; p.&lt;页&gt;]</code> 引用；查不到会如实说明。';
+  log.appendChild(hint);
+}
+
+async function loadDocs() {
+  const r = await fetch('/api/documents');
+  const j = await r.json();
+  const list = $('#doclist'); list.innerHTML = '';
+  $('#doccount').textContent = j.documents.length ? j.documents.length + ' 篇' : '';
+  for (const d of j.documents) {
+    const el = document.createElement('div');
+    el.className = 'doc'; el.dataset.id = d.id;
+    el.innerHTML = `<div class="body">
+        <div class="name">D${d.id} · ${esc(d.filename)}</div>
+        <div class="meta">${d.chunks} 块${d.page_count ? ' · ' + d.page_count + ' 页' : ''} · <span class="st-${d.status}">${d.status}</span></div>
+      </div><div class="del" title="删除">✕</div>`;
+    el.querySelector('.del').onclick = () => deleteDoc(d.id);
+    list.appendChild(el);
+  }
+}
+
+async function deleteDoc(id) {
+  await fetch('/api/documents/' + id, { method: 'DELETE' });
+  loadDocs();
+}
+
+function highlightDoc(id) {
+  document.querySelectorAll('.doc').forEach(e => e.classList.toggle('hl', e.dataset.id == id));
+  const el = document.querySelector(`.doc[data-id="${id}"]`);
+  if (el) el.scrollIntoView({ block: 'nearest' });
+}
+
+async function uploadFile(file) {
+  const prog = $('#upprog');
+  const fd = new FormData(); fd.append('file', file);
+  prog.textContent = '上传中 ' + file.name + ' …';
+  try {
+    const r = await fetch('/api/upload', { method: 'POST', body: fd });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); prog.textContent = '✗ ' + (j.error || r.status); return; }
+    await readSSE(r, ev => {
+      if (ev.t === 'stage') {
+        const label = { received: '已接收', loading: '解析中', chunking: '分块中', embedding: '向量化（模型预热可能稍慢）', chunked: '分块完成', done: '✓ 已索引', skip: '已索引过（跳过）' }[ev.stage] || ev.stage;
+        prog.textContent = label + (ev.chunks ? ' · ' + ev.chunks + ' 块' : '');
+        if (ev.stage === 'done' || ev.stage === 'skip') { loadDocs(); setTimeout(() => prog.textContent = '', 2500); }
+      } else if (ev.t === 'error') { prog.textContent = '✗ ' + ev.message; }
+    });
+  } catch (e) { prog.textContent = '✗ ' + e; }
+}
+
+drop.onclick = () => fileInput.click();
+fileInput.onchange = () => { if (fileInput.files[0]) uploadFile(fileInput.files[0]); fileInput.value = ''; };
+['dragover', 'dragenter'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) uploadFile(f); });
+
+async function ask(q) {
+  busy = true; document.body.classList.add('busy');
+  const turn = document.createElement('div'); turn.className = 'turn';
+  turn.innerHTML = `<div class="q">${esc(q)}</div><div class="thinking">思考中…</div>`;
+  log.appendChild(turn); scrollDown();
+  const thinking = turn.querySelector('.thinking');
+  let answerEl = null;
+  try {
+    const r = await fetch('/api/ask', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: session.session_id, question: q })
+    });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); thinking.className = 'err'; thinking.textContent = '✗ ' + (j.error || r.status); return; }
+    await readSSE(r, ev => {
+      if (ev.t === 'tool') {
+        const arg = ev.input && (ev.input.query || ev.input.document_id || '');
+        const t = document.createElement('div'); t.className = 'trace';
+        t.textContent = `↳ ${ev.name}${arg ? ' ' + JSON.stringify(arg) : ''}`;
+        turn.insertBefore(t, thinking);
+      } else if (ev.t === 'answer') {
+        thinking.remove();
+        answerEl = document.createElement('div'); answerEl.className = 'a';
+        answerEl.textContent = ev.text; turn.appendChild(answerEl);
+      } else if (ev.t === 'done') {
+        if (ev.citations && ev.citations.length) {
+          const box = document.createElement('div'); box.className = 'cites';
+          for (const c of ev.citations) {
+            const chip = document.createElement('span'); chip.className = 'cite';
+            chip.textContent = `[${c.ref}${c.page ? ' p.' + c.page : ''}] ${c.filename}`;
+            chip.onclick = () => highlightDoc(c.document_id);
+            box.appendChild(chip);
+          }
+          turn.appendChild(box);
+        }
+      } else if (ev.t === 'error') {
+        thinking.className = 'err'; thinking.textContent = '✗ ' + ev.message;
+      }
+      scrollDown();
+    });
+  } catch (e) { thinking.className = 'err'; thinking.textContent = '✗ ' + e; }
+  finally { busy = false; document.body.classList.remove('busy'); input.focus(); }
+}
+
+$('#form').addEventListener('submit', e => {
+  e.preventDefault();
+  if (busy) return;
+  const v = input.value.trim(); if (!v) return;
+  input.value = '';
+  ask(v);
+});
+boot();
+</script>
+</body>
+</html>
