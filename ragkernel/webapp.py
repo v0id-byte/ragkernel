@@ -207,9 +207,16 @@ def ask():
     body = request.json or {}
     s = _get_session(body.get("session_id", ""))
     question = (body.get("question") or "").strip()
+    image = body.get("image")
+    images = None
+    if isinstance(image, str) and image.startswith("data:"):
+        header, _, data = image.partition(",")
+        media_type = header[5:].split(";")[0] or "image/jpeg"
+        if data:
+            images = [{"media_type": media_type, "data": data}]
     if not s:
         return jsonify({"error": "会话不存在，先建立会话"}), 404
-    if not question:
+    if not question and not images:
         return jsonify({"error": "空问题"}), 400
     if len(question) > int(_rl().get("max_question_chars", 2000)):
         return jsonify({"error": "问题太长了，说重点"}), 400
@@ -227,7 +234,7 @@ def ask():
     def work():
         try:
             answer, messages, tb, model = agent.ask(
-                question, toolbox=s["toolbox"], history=s["history"],
+                question, toolbox=s["toolbox"], history=s["history"], images=images,
                 on_tool=lambda name, inp: q.put({"t": "tool", "name": name, "input": inp}),
             )
             s["history"] = agent.trim_history(messages)

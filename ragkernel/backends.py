@@ -65,6 +65,14 @@ class AnthropicBackend:
             {"type": "tool_result", "tool_use_id": tid, "content": out} for tid, _, out in results
         ]}]
 
+    def user_message(self, text: str, images: list | None = None) -> dict:
+        if not images:
+            return {"role": "user", "content": text}
+        content = [{"type": "image", "source": {"type": "base64",
+                                                "media_type": im["media_type"], "data": im["data"]}} for im in images]
+        content.append({"type": "text", "text": text or "请根据这张照片判断设备/部件与可能的故障，再检索知识库给出处理建议。"})
+        return {"role": "user", "content": content}
+
 
 class OpenAIBackend:
     def __init__(self, prov: dict):
@@ -104,6 +112,15 @@ class OpenAIBackend:
 
     def tool_result_messages(self, results: list[tuple[str, str, str]]) -> list[dict]:
         return [{"role": "tool", "tool_call_id": tid, "content": out} for tid, _, out in results]
+
+    def user_message(self, text: str, images: list | None = None) -> dict:
+        if not images:
+            return {"role": "user", "content": text}
+        content = [{"type": "text", "text": text or "请根据这张照片判断设备/部件与可能的故障，再检索知识库给出处理建议。"}]
+        for im in images:
+            content.append({"type": "image_url",
+                            "image_url": {"url": f"data:{im['media_type']};base64,{im['data']}"}})
+        return {"role": "user", "content": content}
 
 
 def get_backend(prov: dict):

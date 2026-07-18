@@ -41,16 +41,17 @@ def system_prompt(vertical_fragment: str = "") -> str:
 
 
 def ask(question: str, toolbox: Toolbox | None = None, history: list | None = None,
-        audit=None, on_tool=None):
-    """一次问答（可传 history/toolbox 延续会话）。返回 (answer, messages, toolbox, model)。"""
+        audit=None, on_tool=None, images: list | None = None):
+    """一次问答（可传 history/toolbox 延续会话；images=多模态照片，[{media_type,data}]）。
+    返回 (answer, messages, toolbox, model)。"""
     tb = toolbox or Toolbox(audit=audit)
     tb.current_question = question
-    tb.audit("question", {"question": question})
+    tb.audit("question", {"question": question, "image": bool(images)})
     prov = config.provider()
     be = backends.get_backend(prov)
     specs, handlers = tb.specs_and_handlers()
     tools = be.convert_tools(specs)
-    messages = list(history or []) + [{"role": "user", "content": question}]
+    messages = list(history or []) + [be.user_message(question, images)]
     system = system_prompt(get_vertical().system_fragment())
 
     for _ in range(MAX_TURNS):
