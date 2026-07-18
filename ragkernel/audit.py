@@ -41,6 +41,20 @@ class Audit:
         self.db.commit()
 
 
+def query_stats(days: int = 14) -> dict:
+    """提问量统计：总数 / 会话数 / 近 N 天按天。"""
+    db = connect()
+    total = db.execute("SELECT COUNT(*) FROM events WHERE kind='question'").fetchone()[0]
+    sessions = db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+    rows = db.execute(
+        "SELECT strftime('%Y-%m-%d', ts, 'unixepoch', 'localtime') d, COUNT(*) n "
+        "FROM events WHERE kind='question' AND ts >= strftime('%s','now',? ) "
+        "GROUP BY d ORDER BY d",
+        (f"-{int(days)} days",),
+    ).fetchall()
+    return {"total": total, "sessions": sessions, "by_day": [{"d": r["d"], "n": r["n"]} for r in rows]}
+
+
 def recent_visits(limit: int = 40) -> str:
     db = connect()
     rows = list(db.execute("SELECT * FROM sessions ORDER BY started_at DESC LIMIT ?", (limit,)))

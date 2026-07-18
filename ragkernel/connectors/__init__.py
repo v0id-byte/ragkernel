@@ -2,9 +2,9 @@
 
 from pathlib import Path
 
-from . import docx, markdown, pdf, text
+from . import docx, markdown, pdf, table, text
 
-_MODULES = (pdf, docx, markdown, text)
+_MODULES = (pdf, docx, markdown, text, table)
 _REGISTRY: dict[str, object] = {}
 for _mod in _MODULES:
     for _ext in _mod.EXTS:

@@ -161,6 +161,45 @@ def upload():
     return _sse(stream())
 
 
+@app.get("/api/stats")
+def stats():
+    db = store.connect()
+    return jsonify({
+        "totals": store.stats(db),
+        "documents": store.list_documents(db),
+        "ingestion": store.ingestion_history(db),
+        "categories": store.category_counts(db),
+        "queries": audit.query_stats(),
+    })
+
+
+@app.post("/api/feedback")
+def feedback():
+    """回填闭环：把一条处理结果写成新故障案例入库、立即可检索（KB 越用越准）。"""
+    ip = _client_ip()
+    if not _rate_ok([f"up:{ip}"], int(_rl().get("upload_per_min", 20))):
+        return jsonify({"error": "提交过于频繁，稍后再试"}), 429
+    body = request.json or {}
+    resolution = (body.get("resolution") or "").strip()
+    if not resolution:
+        return jsonify({"error": "请填写实际处理/解决办法"}), 400
+    question = (body.get("question") or "").strip()
+    equipment = (body.get("equipment") or "").strip()
+    result = (body.get("result") or "").strip()
+    parts = []
+    if equipment:
+        parts.append(f"设备/型号：{equipment}")
+    if question:
+        parts.append(f"故障现象/问题：{question}")
+    parts.append(f"实际处理：{resolution}")
+    if result:
+        parts.append(f"结果：{result}")
+    text = "\n".join(parts)
+    title = equipment or question or "反馈案例"
+    rec = pipeline.ingest_record(title=title, text=text, source="feedback")
+    return jsonify({"ok": True, **rec})
+
+
 # ── 问答 ──────────────────────────────────────────────────────
 
 @app.post("/api/ask")

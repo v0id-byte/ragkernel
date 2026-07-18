@@ -2,10 +2,13 @@
 
 data_dir: data
 
-# LLM provider —— provider 无关，一行 base_url 切换。
-# 默认 MiniMax（零成本，开箱即用）。切官方 Claude：base_url 留空 + model: claude-sonnet-5 +
-#   api_key_env: ANTHROPIC_API_KEY（合同/法律等高风险垂直建议用更强模型）。
+# LLM provider —— provider 无关。kind=anthropic（Claude/MiniMax）| openai（vLLM/Ollama/本地）。
+# 默认 MiniMax（零成本，开箱即用）。
+#   Claude:      kind: anthropic, base_url: "", model: claude-sonnet-5, api_key_env: ANTHROPIC_API_KEY
+#   本地 vLLM:   kind: openai, base_url: http://localhost:8000/v1, model: Qwen3-32B-AWQ, api_key_env: VLLM_API_KEY
+#                （私有化：本地引擎几乎都是 OpenAI 兼容；embedding+重排本来就全本地）
 provider:
+  kind: anthropic
   base_url: "https://api.minimaxi.com/anthropic"
   model: "MiniMax-M3"
   api_key_env: MINIMAX_API_KEY
@@ -25,8 +28,12 @@ chunking:
   min_chars: 200
   max_chars: 3000
 
-# 可插拔垂直层：none = NullVertical（本期只做空实现）。
-vertical: none
+# 可插拔垂直层：equipment = 设备维修/售后故障库（拆片段+分类+标源）；none = 通用无分类。
+vertical: equipment
+
+# 分类：默认纯规则（离线、零成本）；llm=true 时对"其他"片段做一次 LLM 精分（复用 provider）。
+classify:
+  llm: false
 
 web:
   host: 127.0.0.1
@@ -34,7 +41,7 @@ web:
 
 upload:
   max_file_mb: 50
-  allowed_ext: [.pdf, .docx, .md, .markdown, .txt]
+  allowed_ext: [.pdf, .docx, .md, .markdown, .txt, .csv, .xlsx]
 
 ratelimit:
   ask_per_min: 30

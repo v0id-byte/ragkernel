@@ -37,6 +37,7 @@ def expand(p: str) -> Path:
 def provider() -> dict:
     """LLM provider 配置：{base_url, model, api_key_env, max_tokens}。"""
     prov = dict(settings().get("provider") or {})
+    prov.setdefault("kind", "anthropic")  # anthropic | openai
     prov.setdefault("model", "claude-sonnet-5")
     prov.setdefault("api_key_env", "ANTHROPIC_API_KEY")
     prov.setdefault("max_tokens", 8000)

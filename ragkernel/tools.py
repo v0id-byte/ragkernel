@@ -42,10 +42,24 @@ class Toolbox:
             self._fname[doc_id] = row["filename"] if row else "?"
         return self._fname[doc_id]
 
+    def _category(self, r):
+        try:
+            mj = r["meta_json"]
+        except (IndexError, KeyError):
+            return None
+        if not mj:
+            return None
+        try:
+            return json.loads(mj).get("category")
+        except Exception:
+            return None
+
     def _cite(self, r) -> str:
         page = f" p.{r['page_no']}" if r["page_no"] else ""
         title = f" · {r['title']}" if r["title"] else ""
-        return f"[D{r['document_id']}#{r['id']}{page}] {self._filename(r['document_id'])}{title}"
+        cat = self._category(r)
+        cat_s = f" · {cat}" if cat else ""
+        return f"[D{r['document_id']}#{r['id']}{page}] {self._filename(r['document_id'])}{title}{cat_s}"
 
     def _restore_window(self, document_id: int, chunk_index: int, window: int) -> str:
         """细检索 + 粗还原：命中块后补回同文档相邻 chunk 的正文，还原上下文。"""
@@ -57,21 +71,25 @@ class Toolbox:
 
     def _track(self, rows) -> None:
         for r in rows:
-            page = r["page_no"]
             self.touched.append({
                 "ref": f"D{r['document_id']}#{r['id']}",
                 "document_id": r["document_id"],
                 "chunk_id": r["id"],
                 "filename": self._filename(r["document_id"]),
-                "page": page,
+                "page": r["page_no"],
+                "category": self._category(r),
             })
 
     # ── 工具实现 ──────────────────────────────────────────────
 
-    def search_documents(self, query: str, k: int = 8) -> str:
+    def search_documents(self, query: str, k: int = 8, category: str | None = None) -> str:
         qvec = embed.embed([query])[0]
+        where, params = "", ()
+        if category:
+            where, params = "json_extract(c.meta_json,'$.category') = ?", (category,)
         rows = search.hybrid_search(
-            self.db, query, qvec, k=k, reranker=self._reranker(), candidates=self._candidates()
+            self.db, query, qvec, k=k, where=where, params=params,
+            reranker=self._reranker(), candidates=self._candidates(),
         )
         rows = self.vertical.post_retrieve(query, rows)  # 垂直层检索后 hook
         self._track(rows)
@@ -114,12 +132,13 @@ class Toolbox:
         specs = [
             {
                 "name": "search_documents",
-                "description": "在企业知识库（已上传的文档）中混合检索相关片段。返回内容带 [D<文档>#<块> p.<页>] 引用标记。",
+                "description": "在企业知识库（已上传的文档）中混合检索相关片段。返回内容带 [D<文档>#<块> p.<页> · 分类] 引用标记。可选 category 只在某一分类里检索。",
                 "input_schema": {
                     "type": "object",
                     "properties": {
                         "query": {"type": "string", "description": "检索词"},
                         "k": {"type": "integer", "description": "返回条数，默认 8"},
+                        "category": {"type": "string", "description": "可选：限定分类（取自 list_categories）"},
                     },
                     "required": ["query"],
                 },
@@ -145,7 +164,7 @@ class Toolbox:
             "list_documents": self.list_documents,
         }
         # 垂直层可追加工具（NullVertical 返回空）
-        v_specs, v_handlers = self.vertical.extra_tools()
+        v_specs, v_handlers = self.vertical.extra_tools(self)
         specs += list(v_specs)
         handlers.update(v_handlers)
         return specs, handlers

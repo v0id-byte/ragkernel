@@ -24,8 +24,17 @@ CREATE TABLE IF NOT EXISTS documents(
   sha256 TEXT UNIQUE NOT NULL,
   page_count INTEGER,
   status TEXT DEFAULT 'pending',
+  source_kind TEXT DEFAULT 'upload',       -- upload | ticket_import | feedback
   meta_json TEXT,
   created_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS ingestion_log(
+  id INTEGER PRIMARY KEY,
+  document_id INTEGER,
+  filename TEXT,
+  action TEXT,                              -- ingested | skipped | feedback
+  chunks INTEGER, added INTEGER, removed INTEGER,
+  ms INTEGER, ts INTEGER
 );
 CREATE TABLE IF NOT EXISTS chunks(
   id INTEGER PRIMARY KEY,
@@ -87,20 +96,44 @@ def get_document(db: sqlite3.Connection, sha256: str) -> sqlite3.Row | None:
 
 def upsert_document(
     db: sqlite3.Connection, filename: str, sha256: str, source_path: str = "",
-    mime: str = "", page_count: int = 0, meta_json: str = "",
+    mime: str = "", page_count: int = 0, meta_json: str = "", source_kind: str = "upload",
 ) -> tuple[int, bool]:
     """按 sha256 幂等。返回 (document_id, existed)。"""
     row = get_document(db, sha256)
     if row:
         return row["id"], True
     cur = db.execute(
-        "INSERT INTO documents(filename,source_path,mime,sha256,page_count,status,meta_json,created_at) "
-        "VALUES(?,?,?,?,?,?,?,?)",
+        "INSERT INTO documents(filename,source_path,mime,sha256,page_count,status,source_kind,meta_json,created_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?)",
         (filename, source_path or None, mime or None, sha256, page_count or None,
-         "pending", meta_json or None, int(time.time())),
+         "pending", source_kind, meta_json or None, int(time.time())),
     )
     db.commit()
     return cur.lastrowid, False
+
+
+def log_ingestion(db, document_id, filename, action, chunks=0, added=0, removed=0, ms=0):
+    db.execute(
+        "INSERT INTO ingestion_log(document_id,filename,action,chunks,added,removed,ms,ts) VALUES(?,?,?,?,?,?,?,?)",
+        (document_id, filename, action, chunks, added, removed, ms, int(time.time())),
+    )
+    db.commit()
+
+
+def ingestion_history(db, limit: int = 50) -> list[dict]:
+    rows = db.execute(
+        "SELECT document_id, filename, action, chunks, ms, ts FROM ingestion_log ORDER BY id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def category_counts(db) -> list[dict]:
+    rows = db.execute(
+        "SELECT json_extract(meta_json,'$.category') cat, COUNT(*) n FROM chunks "
+        "WHERE meta_json IS NOT NULL GROUP BY cat ORDER BY n DESC"
+    ).fetchall()
+    return [{"category": r["cat"] or "未分类", "n": r["n"]} for r in rows]
 
 
 def set_status(db: sqlite3.Connection, document_id: int, status: str) -> None:
@@ -149,7 +182,7 @@ def delete_document(db: sqlite3.Connection, document_id: int) -> int:
 
 def list_documents(db: sqlite3.Connection) -> list[dict]:
     rows = db.execute(
-        "SELECT d.id, d.filename, d.page_count, d.status, d.created_at, "
+        "SELECT d.id, d.filename, d.page_count, d.status, d.source_kind, d.created_at, "
         "  (SELECT COUNT(*) FROM chunks c WHERE c.document_id=d.id) AS chunks "
         "FROM documents d ORDER BY d.id DESC"
     ).fetchall()
@@ -175,5 +208,10 @@ def stats(db: sqlite3.Connection) -> dict:
         "documents": db.execute("SELECT COUNT(*) FROM documents").fetchone()[0],
         "chunks_total": db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0],
         "embedded": db.execute("SELECT COUNT(*) FROM chunks_vec").fetchone()[0],
+        "chars_total": db.execute("SELECT COALESCE(SUM(LENGTH(text)),0) FROM chunks").fetchone()[0],
+    }
+    out["by_source_kind"] = {
+        r["source_kind"]: r["n"]
+        for r in db.execute("SELECT source_kind, COUNT(*) n FROM documents GROUP BY source_kind")
     }
     return out
