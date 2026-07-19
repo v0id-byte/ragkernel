@@ -8,6 +8,7 @@
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -19,6 +20,9 @@ ROOT = Path(__file__).resolve().parent.parent
 QA = ROOT / "eval" / "qa.jsonl"
 CORPUS = ROOT / "eval" / "corpus"
 K = 8
+
+# 评测隔离到独立临时库（eval/eval_out，已 gitignore），绝不把合成夹具写进用户的 data/ KB。
+os.environ.setdefault("RAGKERNEL_DATA_DIR", str(ROOT / "eval" / "eval_out"))
 
 
 def _ensure_corpus() -> None:

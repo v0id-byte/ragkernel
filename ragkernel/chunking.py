@@ -53,8 +53,9 @@ def model_hint(filename: str) -> str:
     避免把版本号/年份误当型号。取不到就返回空（宁缺毋滥）。
     """
     stem = Path(filename).stem
-    for tok in re.findall(r"[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*", stem):
-        if len(tok) < 4 or not re.search(r"\d", tok):
+    # 允许数字打头的型号（17HS24-2104S），但 token 必须字母+数字都有（排除纯数字/纯词）
+    for tok in re.findall(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*", stem):
+        if len(tok) < 4 or not re.search(r"[A-Za-z]", tok) or not re.search(r"\d", tok):
             continue
         if re.fullmatch(r"(?:19|20)\d{2}", tok) or _VERSION.match(tok):  # 年份/版本
             continue
@@ -147,19 +148,29 @@ def md_to_blocks(text: str) -> list[Block]:
             continue
         if _ORDERED.match(line):
             flush_prose()
-            steps = []
+            steps = [line.rstrip()]
+            i += 1
             while i < len(lines):
-                if _ORDERED.match(lines[i]):
-                    steps.append(lines[i].rstrip())
-                    i += 1
-                elif not lines[i].strip() and i + 1 < len(lines) and _ORDERED.match(lines[i + 1]):
-                    i += 1  # 步骤间空行
-                else:
+                cur = lines[i]
+                if _HEADING.match(cur) or _MD_ROW.match(cur):
+                    break  # 硬边界：标题/表格结束工序
+                if not cur.strip():
+                    # 空行：仅当下一非空行是新编号步骤才跨越续入，否则结束（避免吞掉后文正文）
+                    j = i + 1
+                    while j < len(lines) and not lines[j].strip():
+                        j += 1
+                    if j < len(lines) and _ORDERED.match(lines[j]):
+                        i = j
+                        continue
                     break
-            if len(steps) >= 2:
-                blocks.append(Block("procedure", "\n".join(steps), section_path=_sp(section)))
+                steps.append(cur.rstrip())  # 续行（步骤间内联警告/说明）并入本工序，不拆散
+                i += 1
+            body = "\n".join(steps).strip()
+            n_ord = len(re.findall(r"(?m)^\s*(?:\d{1,3}|[一二三四五六七八九十]+)\s*[.、)]", body))
+            if n_ord >= 2:
+                blocks.append(Block("procedure", body, section_path=_sp(section)))
             else:
-                buf.extend(steps)
+                buf.append(body)  # 单步：当普通文本
             continue
         if not line.strip():
             flush_prose()
@@ -254,10 +265,10 @@ def _chunk_prose(b: Block, min_chars: int, max_chars: int, out: list) -> None:
         if _trivial(body) and not dim:  # 纯噪声删；但工程尺寸必留
             continue
         sp = list(b.section_path)
-        # 短的尺寸标注独立成 dimension 片（供尺寸检索/过滤）；其余按元素本类型
+        # 短的尺寸标注独立成 dimension 片；较长的段落含尺寸也照样打 dimension_raw（供尺寸检索/过滤）
         et = "dimension" if (dim and len(body.strip()) <= 40) else b.element_type
         meta = {"element_type": et, "section_path": sp}
-        if et == "dimension":
+        if dim:
             meta["dimension_raw"] = dim.group(0).strip()
         out.append((t or (sp[-1] if sp else ""), body, meta))
 

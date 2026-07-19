@@ -27,7 +27,9 @@ def settings() -> dict:
 
 
 def data_dir() -> Path:
-    d = ROOT / settings().get("data_dir", "data")
+    # RAGKERNEL_DATA_DIR 可覆盖数据目录（供评测/测试隔离到临时库，不污染用户 KB）。
+    override = os.environ.get("RAGKERNEL_DATA_DIR")
+    d = Path(override) if override else ROOT / settings().get("data_dir", "data")
     d.mkdir(parents=True, exist_ok=True)
     return d
 

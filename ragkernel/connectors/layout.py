@@ -48,11 +48,13 @@ def _pages_markdown(doc) -> list[Page]:
 
     维护跨页 heading 栈：每页开头继承上文当前的章节路径，让**跨页/续表**的行不丢 section_path
     （如 §3.5 CN1 端子表跨到下一页、寄存器章节续页）。"""
-    from docling_core.types.doc import DocItemLabel, TableItem
+    from docling_core.types.doc import DocItemLabel, ListItem, TableItem
 
     buckets: dict[int, list[str]] = {}
     stack: list[tuple[int, str]] = []  # 当前活跃章节 (level, title)
-    for item, _level in doc.iterate_items():
+    # traverse_pictures=True：整页/区域 OCR 的文字常挂在 PictureItem 子节点下，必须遍历进去，
+    # 否则扫描件 OCR 后仍取不到文本 → 误判空 → 回退 MarkItDown 丢掉 OCR 结果。
+    for item, _level in doc.iterate_items(traverse_pictures=True):
         prov = item.prov[0] if getattr(item, "prov", None) else None
         page = prov.page_no if prov else 1
         if page not in buckets:  # 新页开头继承上文章节路径
@@ -72,6 +74,12 @@ def _pages_markdown(doc) -> list[Page]:
                 stack.pop()
             stack.append((h, txt))
             buckets[page].append("#" * h + " " + txt)
+        elif isinstance(item, ListItem):
+            # 保留列表序号标记，否则编号工序丢了 "1." → md_to_blocks 认不出 procedure
+            mk = (getattr(item, "marker", "") or "").strip()
+            if getattr(item, "enumerated", False) and mk and mk[-1] not in ".、)":
+                mk += "."
+            buckets[page].append(f"{mk} {txt}" if mk else f"- {txt}")
         else:
             buckets[page].append(txt)
     return [Page(text="\n\n".join(parts), page_no=pg) for pg, parts in sorted(buckets.items()) if parts]
@@ -82,12 +90,15 @@ def load(path) -> list[Page]:
     try:
         doc = _converter("off").convert(str(path)).document  # 快路径：born-digital 免 OCR
         pages = _pages_markdown(doc)
-        npages = doc.num_pages() or 1
-        chars = sum(len(p.text) for p in pages)
-        if chars < 5 * npages:        # 几乎无文本层（扫描件/整页图片）→ 整页强制 OCR
+        npages = doc.num_pages() or len(pages) or 1
+        total = sum(len(p.text) for p in pages)
+        # 逐页判稀疏（而非全文平均）：混合 PDF 里少数扫描页不会被全文均值淹没。
+        # 无文本页 = 根本没出现在 pages 里 → 计入稀疏。
+        sparse = (npages - len(pages)) + sum(1 for p in pages if len(p.text) < 40)
+        if total < 5 * npages:                       # 几乎无文本层（整本扫描/图片）→ 整页强制 OCR
             doc = _converter("full").convert(str(path)).document
             pages = _pages_markdown(doc) or pages
-        elif chars < 40 * npages:     # 文本稀疏（图纸带栅格标注/局部扫描）→ 区域 OCR，保文本层
+        elif sparse >= max(1, round(npages * 0.15)):  # 相当比例页稀疏（混合扫描/图纸）→ 区域 OCR，保文本层
             doc = _converter("region").convert(str(path)).document
             pages = _pages_markdown(doc) or pages
         if pages:

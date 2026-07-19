@@ -5,9 +5,22 @@
 """
 
 import json
+import re
 
 from . import config, embed, rerank, search, store
 from .verticals import get_vertical
+
+
+def _norm_sql(col: str) -> str:
+    """SQL 侧把码值归一（去大小写/分隔符）：E-42 / E42 / e42 视为同一。"""
+    expr = col
+    for ch in ("-", ".", ":", "_", " "):
+        expr = f"replace({expr}, '{ch}', '')"
+    return f"lower({expr})"
+
+
+def _norm_key(s: str) -> str:
+    return re.sub(r"[-.:_ ]", "", s or "").lower()
 
 
 class Toolbox:
@@ -87,8 +100,10 @@ class Toolbox:
         "category", "element_type", "fault_code", "pin_label", "pin_normalized",
         "connector", "model", "table_subtype", "dimension_type",
     )
+    # 码值类字段：按归一后精确等值匹配（容大小写/分隔符，但不误配 E-42↔E-420）。
+    _CODE_FIELDS = ("fault_code", "pin_label", "pin_normalized", "connector")
 
-    def _search(self, query: str, k: int, where: str = "", params: tuple = ()) -> str:
+    def _search(self, query: str, k: int, where: str = "", params: tuple = (), restore: bool = True) -> str:
         qvec = embed.embed([query])[0]
         rows = search.hybrid_search(
             self.db, query, qvec, k=k, where=where, params=params,
@@ -99,7 +114,7 @@ class Toolbox:
         self.audit("tool:search", {"query": query, "where": where, "hits": [r["id"] for r in rows]})
         if not rows:
             return "（无结果）"
-        win = self._restore_win()
+        win = self._restore_win() if restore else 0
         parts = []
         for r in rows:
             body = self._restore_window(r["document_id"], r["chunk_index"], win) if win > 0 else r["text"]
@@ -116,7 +131,17 @@ class Toolbox:
         """只在某个 meta 字段=某值的片里检索（如 field='fault_code' value='E-42'）。"""
         if field not in self.FILTERABLE:
             return f"（不支持的过滤字段 {field}；可用：{', '.join(self.FILTERABLE)}）"
-        return self._search(query, k, f"json_extract(c.meta_json,'$.{field}') = ?", (value,))
+        col = f"json_extract(c.meta_json,'$.{field}')"
+        if field in ("pin_label", "pin_normalized"):
+            # pin_normalized 存空格分隔的归一 token；按 token 边界匹配（容一片多针脚，不误配 P3/P30）
+            pcol = "json_extract(c.meta_json,'$.pin_normalized')"
+            where, params = f"(' ' || lower({pcol}) || ' ') LIKE ?", (f"% {_norm_key(value)} %",)
+        elif field in self._CODE_FIELDS:
+            where, params = f"{_norm_sql(col)} = ?", (_norm_key(value),)  # 归一精确(E-42==E42, 不误配 E-420)
+        else:
+            where, params = f"{col} = ?", (value,)
+        # 字段过滤=精确定位那一条 → 关掉 restore_window，避免把邻近的 E42/E-420 行拉进同一引用
+        return self._search(query, k, where, params, restore=False)
 
     def read_document(self, document_id: int) -> str:
         rows = self.db.execute(

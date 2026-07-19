@@ -43,25 +43,37 @@ def _dim_type(raw: str) -> str:
     return "size" if re.search(r"[x×]", r) else "length"
 
 
+def _pnorm(s: str) -> str:
+    return re.sub(r"[-.:_ ]", "", s).lower()
+
+
 def _enrich(meta: dict, body: str) -> None:
-    """给一片补领域精确键（故障码/针脚/连接器/尺寸类型），供混合检索精确命中与元数据过滤。"""
+    """给一片补领域精确键（故障码/针脚/连接器/尺寸类型），供混合检索精确命中与元数据过滤。
+    一片里可能出现多个针脚（未拆行的 kv），全部收进 pin_normalized（空格分隔归一 token），
+    让 search_by_field 能精确命中其中任一个（而非只有第一个）。"""
     fc = _FAULT.search(body)
     if fc:
         meta["fault_code"] = fc.group(0).strip()
     et = meta.get("element_type")
     if et in ("kv", "table", "dimension"):
-        cp = _CONN_PIN.search(body)
-        if cp:  # 连接器-针脚:归一 connector + pin_number + pin_normalized
-            meta["connector"] = (cp.group(1) + cp.group(2)).upper()
-            meta["pin_number"] = cp.group(3)
-            meta["pin_normalized"] = f"{meta['connector']}:{cp.group(3)}"
-            meta["pin_label"] = cp.group(0).strip()
-        else:
-            pin = _PIN.search(body)
-            if pin:
-                meta["pin_label"] = pin.group(0).strip()
-    if et == "dimension":
-        meta["dimension_type"] = _dim_type(meta.get("dimension_raw", ""))
+        conns = _CONN_PIN.findall(body)   # [(prefix, num, pin), ...]
+        pins = _PIN.findall(body)          # [str, ...]
+        keys, labels = [], []
+        for pfx, num, pn in conns:
+            conn = (pfx + num).upper()
+            keys.append(_pnorm(f"{conn}:{pn}"))
+            labels.append(f"{conn}-{pn}")
+        for p in pins:
+            keys.append(_pnorm(p))
+            labels.append(p)
+        if conns:  # 首个连接器-针脚给 connector/pin_number（单针脚常见场景）
+            meta["connector"] = (conns[0][0] + conns[0][1]).upper()
+            meta["pin_number"] = conns[0][2]
+        if keys:
+            meta["pin_normalized"] = " ".join(dict.fromkeys(keys))    # 归一 token，容多针脚
+            meta["pin_label"] = " ".join(dict.fromkeys(labels))
+    if meta.get("dimension_raw"):  # 尺寸类型:只要含尺寸就打(含较长段落里的尺寸,不限 dimension 片)
+        meta["dimension_type"] = _dim_type(meta["dimension_raw"])
 
 
 # 分类关键词首命中表(安全警告优先——安全相关必须先被识别)
@@ -110,7 +122,9 @@ class Equipment:
         out = []
         for title, body, meta in chunk_blocks(md_to_blocks(text), min_c, max_c):
             m = dict(meta)
-            m["category"] = classify(body)
+            # 工序整片恒归「处理步骤」——其首步常含"断电"等安全词,若按关键词分类会误判「安全警告」，
+            # 令 search_by_category('处理步骤') 漏掉真正的维修工序。
+            m["category"] = "处理步骤" if meta.get("element_type") == "procedure" else classify(body)
             m["by"] = "rule"
             _enrich(m, body)
             out.append((title, body, m))
