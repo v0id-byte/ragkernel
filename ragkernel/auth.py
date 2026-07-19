@@ -205,12 +205,14 @@ def revoke_token(token: str):
 
 
 def resolve_token(token: str) -> dict | None:
-    """有效 token → 对应用户（连带 is_active 检查）；顺手刷新 last_seen_at。"""
+    """有效 **session** token → 对应用户（连带 is_active 检查）；顺手刷新 last_seen_at。
+    **只认 token_kind='session'**——agent token（MCP 用的长效 PAT）绝不能拿来过 @require_auth 走
+    web 的上传/删除/管理接口（边界必须双向：web token 进不了 MCP，agent token 也进不了 web）。"""
     db = connect()
     now = int(time.time())
     row = db.execute(
         "SELECT u.* FROM tokens t JOIN users u ON u.id = t.user_id "
-        "WHERE t.token_hash=? AND t.expires_at > ? AND u.is_active=1",
+        "WHERE t.token_hash=? AND t.token_kind='session' AND t.expires_at > ? AND u.is_active=1",
         (_hash_token(token), now),
     ).fetchone()
     if not row:
