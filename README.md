@@ -79,7 +79,8 @@ config/settings.yaml                                   # provider / 检索 / 上
 
 ## 致谢 / Acknowledgments
 
-- **[MarkItDown](https://github.com/microsoft/markitdown)**（Microsoft，MIT License）—— PDF / Word / PPT / HTML → Markdown 的文档转换。
+- **[Docling](https://github.com/docling-project/docling)**（IBM，MIT License）+ **[RapidOCR](https://github.com/RapidAI/RapidOCR)**（Apache-2.0，PP-OCRv6 中文 ONNX）—— PDF 版面/表格结构分析 + OCR，修中文图纸/扫描件识别度、产真实页码引用。
+- **[MarkItDown](https://github.com/microsoft/markitdown)**（Microsoft，MIT License）—— Word / PPT / HTML → Markdown 的文档转换（PDF 已交给 Docling）。
 - **[BAAI bge-m3 / bge-reranker-v2-m3](https://huggingface.co/BAAI)** —— 本地向量与重排模型。
 - **[sqlite-vec](https://github.com/asg017/sqlite-vec)** —— SQLite 向量检索扩展。
 - **[jieba](https://github.com/fxsjy/jieba)** —— 中文分词。
