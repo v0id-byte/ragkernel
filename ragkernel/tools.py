@@ -5,9 +5,27 @@
 """
 
 import json
+import re
 
 from . import config, embed, rerank, search, store
 from .verticals import get_vertical
+
+
+def _norm_sql(col: str) -> str:
+    """SQL 侧把码值归一（去大小写/分隔符）：E-42 / E42 / e42 视为同一。"""
+    expr = col
+    for ch in ("-", ".", ":", "_", " "):
+        expr = f"replace({expr}, '{ch}', '')"
+    return f"lower({expr})"
+
+
+def _norm_key(s: str) -> str:
+    return re.sub(r"[-.:_ ]", "", s or "").lower()
+
+
+def _pin_key(s: str) -> str:
+    """针脚归一：保连接器:针脚结构（CN1-12→cn1:12，不撞 CN11-2→cn11:2）。"""
+    return re.sub(r"[-_ ]+", ":", (s or "").strip()).lower()
 
 
 class Toolbox:
@@ -82,26 +100,55 @@ class Toolbox:
 
     # ── 工具实现 ──────────────────────────────────────────────
 
-    def search_documents(self, query: str, k: int = 8, category: str | None = None) -> str:
+    # 可按 meta_json 字段过滤检索的白名单（垂直层拆片时写入这些键）。
+    FILTERABLE = (
+        "category", "element_type", "fault_code", "pin_label", "pin_normalized",
+        "connector", "model", "table_subtype", "dimension_type",
+    )
+
+    def _search(self, query: str, k: int, where: str = "", params: tuple = (), restore: bool = True) -> str:
         qvec = embed.embed([query])[0]
-        where, params = "", ()
-        if category:
-            where, params = "json_extract(c.meta_json,'$.category') = ?", (category,)
         rows = search.hybrid_search(
             self.db, query, qvec, k=k, where=where, params=params,
             reranker=self._reranker(), candidates=self._candidates(),
         )
         rows = self.vertical.post_retrieve(query, rows)  # 垂直层检索后 hook
         self._track(rows)
-        self.audit("tool:search_documents", {"query": query, "hits": [r["id"] for r in rows]})
+        self.audit("tool:search", {"query": query, "where": where, "hits": [r["id"] for r in rows]})
         if not rows:
             return "（无结果）"
-        win = self._restore_win()
+        win = self._restore_win() if restore else 0
         parts = []
         for r in rows:
             body = self._restore_window(r["document_id"], r["chunk_index"], win) if win > 0 else r["text"]
             parts.append(self._cite(r) + "\n" + (body or r["text"]))
         return "\n────\n".join(parts)
+
+    def search_documents(self, query: str, k: int = 8, category: str | None = None) -> str:
+        where, params = ("", ())
+        if category:
+            where, params = "json_extract(c.meta_json,'$.category') = ?", (category,)
+        return self._search(query, k, where, params)
+
+    def search_by_meta(self, query: str, field: str, value: str, k: int = 8) -> str:
+        """只在某个 meta 字段=某值的片里检索（如 field='fault_code' value='E-42'）。"""
+        if field not in self.FILTERABLE:
+            return f"（不支持的过滤字段 {field}；可用：{', '.join(self.FILTERABLE)}）"
+        col = f"json_extract(c.meta_json,'$.{field}')"
+        # 字段过滤=精确定位那一条 → 一律关掉 restore_window，避免把邻近的 E42/E-420 行拉进同一引用。
+        # 多值 token 字段（一片多针脚/多尺寸）：按 token 边界匹配。
+        if field in ("pin_label", "pin_normalized"):
+            pcol = "json_extract(c.meta_json,'$.pin_normalized')"
+            return self._search(query, k, f"(' '||lower({pcol})||' ') LIKE ?", (f"% {_pin_key(value)} %",), restore=False)
+        if field == "dimension_type":
+            return self._search(query, k, f"(' '||lower({col})||' ') LIKE ?", (f"% {value.strip().lower()} %",), restore=False)
+        # 码值字段：先原样精确（E-42 只配 E-42，不误配同库里 distinct 的 E42），无命中再归一回退（容 E42 找 E-42）。
+        if field in ("fault_code", "connector"):
+            exact = self._search(query, k, f"{col} = ?", (value,), restore=False)
+            return exact if exact != "（无结果）" else self._search(
+                query, k, f"{_norm_sql(col)} = ?", (_norm_key(value),), restore=False
+            )
+        return self._search(query, k, f"{col} = ?", (value,), restore=False)
 
     def read_document(self, document_id: int) -> str:
         rows = self.db.execute(

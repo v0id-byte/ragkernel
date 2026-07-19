@@ -25,6 +25,8 @@ retrieval:
   restore_window: 4    # 命中 chunk 后，前后各补多少个同文档 chunk 还原上下文
 
 chunking:
+  # 元素级拆片：表格一行一片(表头前置)、工序整片、键值逐条、正文按标题+大小切。
+  # min/max 只作用于正文(prose)；表格/工序/键值按自然单元，不受此约束。
   min_chars: 200
   max_chars: 3000
 
