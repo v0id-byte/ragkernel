@@ -43,12 +43,42 @@ def seg(text: str) -> str:
     return " ".join(base + extra)
 
 
+_VERSION = re.compile(r"^(?:v|rev|ver|版)?\d+(?:\.\d+)*$", re.I)  # V2 / Rev3 / 1.9 / 版2
+
+
 def model_hint(filename: str) -> str:
-    """从文件名抽设备型号（如 `GM28-EC2860H - 图纸1.pdf` → `GM28-EC2860H`），供上下文前缀。"""
+    """从文件名抽设备型号（如 `GM28-EC2860H - 图纸1.pdf` → `GM28-EC2860H`），供上下文前缀。
+
+    只取字母数字混合、长度≥4 的型号样 token；跳过年份(2024)与版本(V2/Rev3/1.9)，
+    避免把版本号/年份误当型号。取不到就返回空（宁缺毋滥）。
+    """
     stem = Path(filename).stem
-    m = re.search(r"[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*", stem)
-    tok = m.group(0) if m else ""
-    return tok if (tok and re.search(r"\d", tok) and len(tok) >= 4) else ""
+    for tok in re.findall(r"[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*", stem):
+        if len(tok) < 4 or not re.search(r"\d", tok):
+            continue
+        if re.fullmatch(r"(?:19|20)\d{2}", tok) or _VERSION.match(tok):  # 年份/版本
+            continue
+        # 去掉版本/年份样 hyphen 段(Rev3/V2/2024)后核心仍需含数字，避免 "Document-Rev3"/"Report-2024" 词+版本/年份
+        core = "-".join(
+            s for s in tok.split("-") if not re.fullmatch(r"(?:v|rev|ver)\d+|(?:19|20)\d{2}", s, re.I)
+        )
+        if len(core) < 4 or not re.search(r"\d", core):
+            continue
+        if tok.lower() in ("pdf", "docx", "html"):
+            continue
+        return tok
+    return ""
+
+
+# 工程尺寸/标注模式（Ø8 · R2 · M4 · 45° · 12±0.1 · 4×M3 · 24mm · 10-20mm）——绝不当噪声删。
+_DIMENSION = re.compile(
+    r"[Ø⌀RrMm]\s*\d+(?:\.\d+)?"
+    r"|\d+(?:\.\d+)?\s*(?:mm|cm|μm|um|nm|in|°|N·?m|kg|g)"
+    r"|\d+(?:\.\d+)?\s*±\s*\d+(?:\.\d+)?"
+    r"|\d+(?:\.\d+)?\s*[x×]\s*\d+(?:\.\d+)?"
+    r"|\d+(?:\.\d+)?\s*[-~]\s*\d+(?:\.\d+)?\s*(?:mm|cm|°)?",
+    re.I,
+)
 
 
 def compose_context(model: str, meta: dict) -> str:
@@ -213,16 +243,23 @@ def _chunk_table(b: Block, tid: str, min_chars: int, out: list) -> None:
 
 
 def _trivial(body: str) -> bool:
-    """去掉数字/标点后不足 2 个实义字符（CJK 或字母）——图纸里孤立的尺寸数字/单字符噪声。"""
+    """去掉数字/标点后不足 2 个实义字符——图纸里孤立的页码/网格号/单字符噪声（1/0/A）。
+    注意：工程尺寸（Ø8/M4/45°/12±0.1）会先被 _DIMENSION 命中留下，不走这里删。"""
     return len(re.sub(r"[\s\d.,:：;；\-–—+*/()|]", "", body)) < 2
 
 
 def _chunk_prose(b: Block, min_chars: int, max_chars: int, out: list) -> None:
     for t, body in split_note(b.text, min_chars, max_chars):
-        if _trivial(body):
+        dim = _DIMENSION.search(body)
+        if _trivial(body) and not dim:  # 纯噪声删；但工程尺寸必留
             continue
         sp = list(b.section_path)
-        out.append((t or (sp[-1] if sp else ""), body, {"element_type": b.element_type, "section_path": sp}))
+        # 短的尺寸标注独立成 dimension 片（供尺寸检索/过滤）；其余按元素本类型
+        et = "dimension" if (dim and len(body.strip()) <= 40) else b.element_type
+        meta = {"element_type": et, "section_path": sp}
+        if et == "dimension":
+            meta["dimension_raw"] = dim.group(0).strip()
+        out.append((t or (sp[-1] if sp else ""), body, meta))
 
 
 def chunk_blocks(blocks: list[Block], min_chars: int = 200, max_chars: int = 3000) -> list[tuple[str, str, dict]]:
@@ -239,7 +276,7 @@ def chunk_blocks(blocks: list[Block], min_chars: int = 200, max_chars: int = 300
             out.append((title, body, {"element_type": "procedure", "section_path": list(b.section_path)}))
         elif b.element_type == "kv":
             line = b.text.strip()
-            if _trivial(line):
+            if _trivial(line) and not _DIMENSION.search(line):
                 continue
             m = _KV.match(line) or _KV_DASH.match(line)
             key = (m.group(1).strip()[:40] if m else "")

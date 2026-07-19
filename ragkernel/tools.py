@@ -83,7 +83,10 @@ class Toolbox:
     # ── 工具实现 ──────────────────────────────────────────────
 
     # 可按 meta_json 字段过滤检索的白名单（垂直层拆片时写入这些键）。
-    FILTERABLE = ("category", "element_type", "fault_code", "pin_label", "model", "table_subtype")
+    FILTERABLE = (
+        "category", "element_type", "fault_code", "pin_label", "pin_normalized",
+        "connector", "model", "table_subtype", "dimension_type",
+    )
 
     def _search(self, query: str, k: int, where: str = "", params: tuple = ()) -> str:
         qvec = embed.embed([query])[0]

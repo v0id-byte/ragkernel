@@ -35,21 +35,29 @@ def _run(use_rerank: bool) -> dict:
     db = store.connect()
     rr = rerank.get() if use_rerank else None
     items = [json.loads(x) for x in QA.read_text(encoding="utf-8").splitlines() if x.strip()]
+    pos = [it for it in items if "expect" in it]     # 正样本:应命中的子串
+    neg = [it for it in items if "absent" in it]      # 负样本:该串不应出现在 top-1(相似码/型号不串扰)
     hit = 0
     mrr = 0.0
-    for it in items:
+    for it in pos:
         qvec = embed.embed([it["question"]])[0]
         rows = search.hybrid_search(db, it["question"], qvec, k=K, reranker=rr, candidates=40)
-        rank = None
-        for i, r in enumerate(rows, 1):
-            if it["expect"] in (r["text"] or ""):
-                rank = i
-                break
+        rank = next((i for i, r in enumerate(rows, 1) if it["expect"] in (r["text"] or "")), None)
         if rank:
             hit += 1
             mrr += 1.0 / rank
-    n = max(len(items), 1)
-    return {"n": len(items), "recall@k": round(hit / n, 3), "mrr": round(mrr / n, 3)}
+    neg_ok = 0
+    for it in neg:
+        qvec = embed.embed([it["question"]])[0]
+        rows = search.hybrid_search(db, it["question"], qvec, k=K, reranker=rr, candidates=40)
+        top1 = (rows[0]["text"] if rows else "") or ""
+        if it["absent"] not in top1:
+            neg_ok += 1
+    n = max(len(pos), 1)
+    out = {"n": len(pos), "recall@k": round(hit / n, 3), "mrr": round(mrr / n, 3)}
+    if neg:
+        out["neg_top1_ok"] = f"{neg_ok}/{len(neg)}"
+    return out
 
 
 def main():

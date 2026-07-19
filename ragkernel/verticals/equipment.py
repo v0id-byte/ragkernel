@@ -12,19 +12,56 @@ from ..chunking import chunk_blocks, md_to_blocks
 from . import register
 
 # 领域精确键抽取:故障码 / 针脚——写进 meta 供 BM25 精确命中 + 按字段过滤。
-_FAULT = re.compile(r"E-?\d{1,4}|F\d{2,5}|报警\s*\d{1,4}|Err?\.?\s*\d{1,4}")
-_PIN = re.compile(r"\bP\d{1,3}\b")
+# 故障/报警码:E-42 E42 E42.1 · F0022 · A-03 A.90 · AL.013 Er.740 · OC1 OV2 UV · 报警12 故障码3
+_FAULT = re.compile(
+    r"\bE-?\d{1,4}(?:\.\d+)?\b"          # E-42 / E42 / E42.1
+    r"|\bF\d{2,5}\b"                      # F0022
+    r"|\bA[.\-]\d{1,3}\b"               # A-03 / A.90（需分隔符,避开 A4 这类）
+    r"|\b(?:AL|Er|Err)\.?-?\d{1,4}\b"   # AL.013 / Er.740
+    r"|\b(?:OC|OV|UV)\d{0,2}\b"          # OC1 / OV2 / UV
+    r"|报警\s*\d{1,4}|故障码?\s*\d{1,4}",
+    re.I,
+)
+# 针脚/端子:P3 · PA0/PB12(MCU) · GPIO46 · IO0
+_PIN = re.compile(r"\bP[A-F]?\d{1,3}\b|\bGPIO\d{1,2}\b|\bIO\d{1,2}\b", re.I)
+# 连接器-针脚:CN1-12 / X1:12 / J3-5 / TB2-4 → 归一为 connector + pin_number
+_CONN_PIN = re.compile(r"\b(CN|TB|J|X|K)\s?(\d{1,2})\s?[-:_]\s?(\d{1,2})\b", re.I)
+
+
+def _dim_type(raw: str) -> str:
+    r = raw.strip()
+    if r[:1] in "Ø⌀":
+        return "diameter"
+    if r[:1] in "Rr":
+        return "radius"
+    if r[:1] in "Mm" and not r.lower().startswith("mm"):
+        return "thread"
+    if "°" in r:
+        return "angle"
+    if "±" in r:
+        return "tolerance"
+    return "size" if re.search(r"[x×]", r) else "length"
 
 
 def _enrich(meta: dict, body: str) -> None:
-    """给一片补领域精确键（故障码/针脚），供混合检索精确命中与元数据过滤。"""
+    """给一片补领域精确键（故障码/针脚/连接器/尺寸类型），供混合检索精确命中与元数据过滤。"""
     fc = _FAULT.search(body)
     if fc:
-        meta["fault_code"] = fc.group(0)
-    if meta.get("element_type") in ("kv", "table"):
-        pin = _PIN.search(body)
-        if pin:
-            meta["pin_label"] = pin.group(0)
+        meta["fault_code"] = fc.group(0).strip()
+    et = meta.get("element_type")
+    if et in ("kv", "table", "dimension"):
+        cp = _CONN_PIN.search(body)
+        if cp:  # 连接器-针脚:归一 connector + pin_number + pin_normalized
+            meta["connector"] = (cp.group(1) + cp.group(2)).upper()
+            meta["pin_number"] = cp.group(3)
+            meta["pin_normalized"] = f"{meta['connector']}:{cp.group(3)}"
+            meta["pin_label"] = cp.group(0).strip()
+        else:
+            pin = _PIN.search(body)
+            if pin:
+                meta["pin_label"] = pin.group(0).strip()
+    if et == "dimension":
+        meta["dimension_type"] = _dim_type(meta.get("dimension_raw", ""))
 
 
 # 分类关键词首命中表(安全警告优先——安全相关必须先被识别)
@@ -121,9 +158,10 @@ class Equipment:
             {
                 "name": "search_by_field",
                 "description": (
-                    "按元数据字段精确过滤检索。field 可选:element_type(table/procedure/kv/prose)、"
-                    "fault_code(故障码如 E-42)、pin_label(针脚如 P3)、model(设备型号)、"
-                    "table_subtype(故障码表/针脚表/参数表/备件表)。例:field='fault_code',value='E-42' 只查该故障码那行。"
+                    "按元数据字段精确过滤检索。field 可选:element_type(table/procedure/kv/dimension/prose)、"
+                    "fault_code(故障码如 E-42/AL.013)、pin_label(针脚如 P3/PA0)、connector(连接器如 CN1)、"
+                    "pin_normalized(归一针脚如 CN1:12)、dimension_type(尺寸类型 diameter/thread/radius/angle)、"
+                    "model(设备型号)、table_subtype(故障码表/针脚表/参数表/备件表)。例:field='fault_code',value='E-42'。"
                 ),
                 "input_schema": {
                     "type": "object",
