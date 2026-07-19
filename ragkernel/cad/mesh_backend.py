@@ -172,6 +172,7 @@ def load_stl(path, limits: dict, parser_meta: dict) -> CADDocument:
         "is_watertight": is_wt,
         "is_volume": is_vol,
         "encoding": enc,
+        "unit_block": doc.units,  # STL 单位块（unit=None + 警告）进 document 实体，供 inspect_cad_document 读取
     }
     doc_ent = EngineeringEntity(
         entity_uid="document", entity_type="document", name=fname, parent_uid=None,

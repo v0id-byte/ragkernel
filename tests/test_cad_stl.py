@@ -84,3 +84,12 @@ def test_no_per_triangle_chunk_explosion(ingest, cad_db):
                               (res["document_id"],)).fetchone()[0]
     assert res["chunks"] == n_chunks
     assert n_chunks <= 3  # document + mesh（本例无多组件）
+
+
+def test_stl_inspect_units_preserved(ingest, toolbox):
+    """inspect_cad_document 对 STL 必须带出「单位未知」溯源，不能返回 units:null。"""
+    doc_id = ingest("box_10x20x30.stl")["document_id"]
+    out = json.loads(toolbox.inspect_cad_document(doc_id))
+    assert out["units"] is not None
+    assert out["units"]["unit"] is None
+    assert "does not reliably encode" in out["units"]["warning"]

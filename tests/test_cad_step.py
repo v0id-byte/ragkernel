@@ -140,3 +140,61 @@ def test_entity_uid_addressing(ingest, toolbox, entities):
     out = json.loads(toolbox.get_cad_entity(doc_id, part["entity_uid"]))
     assert out["entity_uid"] == part["entity_uid"]
     assert out["name"] == "Box"
+
+
+# ── Codex 评审修复的回归测试 ──────────────────────────────────────
+
+def test_nested_assembly_transform_and_volume(ingest, entities):
+    """嵌套 + 旋转装配：world bbox 与 location_matrix 同序一致（转换乘序修复），
+    且子装配体积并入父级 instance_summed_volume（嵌套漏算修复）。"""
+    import itertools
+    doc_id = ingest("nested_rotated_assembly.step")["document_id"]
+    rows = [parse_json_fields(e) for e in entities(doc_id)]
+    top = next(e for e in rows if e["entity_type"] == "assembly" and e["parent_uid"] == "document")
+    pin_proto = next(e for e in rows if e["entity_type"] == "part")
+    pin_occ = next(e for e in rows if e["entity_type"] == "component_instance")
+    # 嵌套子装配体积并入父级（Pin = 4*4*20 = 320）
+    assert abs(top["geometry"]["instance_summed_volume"]["value"] - 320.0) < 1e-2
+    # world bbox = location_matrix 作用于本地 bbox（含 90° 旋转的非交换变换也一致）
+    M = pin_occ["geometry"]["location_matrix"]
+    lb = pin_proto["properties"]["local_bounding_box"]["value"]
+    corners = itertools.product([lb[0], lb[3]], [lb[1], lb[4]], [lb[2], lb[5]])
+    tc = [[M[i][0] * x + M[i][1] * y + M[i][2] * z + M[i][3] for i in range(3)] for x, y, z in corners]
+    exp = [min(c[k] for c in tc) for k in range(3)] + [max(c[k] for c in tc) for k in range(3)]
+    wb = pin_occ["geometry"]["world_bounding_box"]
+    assert all(abs(a - b) < 1e-3 for a, b in zip(exp, wb))
+
+
+def test_multi_body_normal(ingest, entities):
+    doc_id = ingest("multi_body.step")["document_id"]
+    parts = [e for e in entities(doc_id) if e["entity_type"] == "part"]
+    assert len(parts) == 3
+
+
+def test_multi_body_root_limit_enforced(ingest, monkeypatch):
+    """多自由根零件也须受实体上限约束（根循环不绕过 _check）。"""
+    from ragkernel.cad import limits as L
+    monkeypatch.setattr(L, "load_limits", lambda: {**L.DEFAULTS, "max_entities": 1})
+    res = ingest("multi_body.step")
+    assert res.get("rejected") is True
+
+
+def test_step_component_count(ingest, toolbox):
+    """component_count 对 STEP 返回 组件实例数/原型数（非只给 STL 键的 null）。"""
+    doc_id = ingest("assembly_named_colored.step")["document_id"]
+    out = json.loads(toolbox.query_geometry(doc_id, "document", ["component_count"]))
+    cc = out["results"]["component_count"]
+    assert cc.get("component_instance_count") == 3
+    assert cc.get("part_prototype_count") == 2
+
+
+def test_assembly_tree_chunk_uid_dereferenceable(ingest, cad_db, toolbox):
+    """装配树片的 cad_entity_uid 指向真实实体，get_cad_entity 可解引用（非合成 assembly-tree）。"""
+    res = ingest("assembly_named_colored.step")
+    rows = cad_db.execute("SELECT meta_json FROM chunks WHERE document_id=? AND title LIKE '%装配树%'",
+                          (res["document_id"],)).fetchall()
+    assert rows
+    uid = json.loads(rows[0]["meta_json"])["cad_entity_uid"]
+    assert uid != "assembly-tree"
+    out = json.loads(toolbox.get_cad_entity(res["document_id"], uid))
+    assert "error" not in out and out["entity_type"] == "assembly"

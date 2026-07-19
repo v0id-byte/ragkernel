@@ -324,8 +324,11 @@ class Toolbox:
         elif key in ("face_type_histogram", "cylindrical_face_count", "is_watertight", "is_volume"):
             return g.get(key, {"available": False})
         elif key == "component_count":
-            return {"vertex_connected_body_count": g.get("vertex_connected_body_count"),
-                    "face_connected_component_count": g.get("face_connected_component_count")}
+            # STL：顶点连通体/面连通组件；STEP：组件实例数/零件原型数——按存在项返回，别只给 STL 键
+            avail = {k: g[k] for k in (
+                "vertex_connected_body_count", "face_connected_component_count",
+                "component_instance_count", "part_prototype_count") if g.get(k) is not None}
+            return avail or {"available": False}
         return {"available": False}
 
     def inspect_cad_document(self, document_id: int) -> str:
@@ -433,11 +436,15 @@ class Toolbox:
                           ensure_ascii=False)
 
     def search_engineering_objects(self, query: str, entity_type: str | None = None, k: int = 8) -> str:
-        where, params = ("", ())
+        # 始终限定 CAD 片（element_type='cad'）——否则普通文档片也会命中、entity_uid 为 null、无法接续 get_cad_entity。
+        clauses = ["json_extract(c.meta_json,'$.element_type') = 'cad'"]
+        params: list = []
         if entity_type:
-            where, params = "json_extract(c.meta_json,'$.cad_entity_type') = ?", (entity_type,)
+            clauses.append("json_extract(c.meta_json,'$.cad_entity_type') = ?")
+            params.append(entity_type)
+        where = " AND ".join(clauses)
         qvec = embed.embed([query])[0]
-        rows = search.hybrid_search(self.db, query, qvec, k=k, where=where, params=params,
+        rows = search.hybrid_search(self.db, query, qvec, k=k, where=where, params=tuple(params),
                                     reranker=self._reranker(), candidates=self._candidates())
         self._track(rows)
         matches = []

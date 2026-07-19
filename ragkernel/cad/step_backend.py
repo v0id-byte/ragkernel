@@ -277,10 +277,19 @@ class _Walker:
                 wbox = sub.geometry.get("overall_world_bounding_box")
                 if wbox:
                     world_boxes.append(wbox)
+                # 嵌套子装配的按实例求和体积须并入父级，否则一层以上会漏算
+                sub_vol = sub.geometry.get("instance_summed_volume", {})
+                if sub_vol.get("value") is not None:
+                    summed_vol += sub_vol["value"]
+                    have_vol = True
             else:
                 proto_uid = _entry(ref)
                 proto = self.ensure_part(ref, proto_uid)
-                world_shape = comp_shape.Moved(TopLoc_Location(world_trsf))
+                # 用完整世界变换 comp_world_trsf（= world_trsf * child_loc）作用到**清零放置**的原型形状，
+                # 使 world_bounding_box 与记录的 location_matrix 同序——含嵌套旋转等非交换变换也一致
+                # （直接 comp_shape.Moved(world_trsf) 会与 location_matrix 的乘序不符）。
+                base_shape = self.st.GetShape_s(ref).Located(TopLoc_Location())
+                world_shape = base_shape.Moved(TopLoc_Location(comp_world_trsf))
                 wbox = _bbox(world_shape)
                 inst = EngineeringEntity(
                     entity_uid=occ_uid, entity_type="component_instance", name=proto.name,
@@ -377,6 +386,7 @@ def load_step(path, limits: dict, parser_meta: dict) -> CADDocument:
         root_boxes: list = []
         try:
             for i in range(1, roots.Length() + 1):
+                walker._check(0)  # 多个自由根零件（无装配树）也须受实体数/时长上限约束，不得绕过
                 root = roots.Value(i)
                 ruid = _entry(root)
                 if shape_tool.IsAssembly_s(root):

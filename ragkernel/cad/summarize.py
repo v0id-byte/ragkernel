@@ -147,8 +147,11 @@ def _assembly_tree_page(doc: CADDocument) -> Page | None:
                 walk(child.entity_uid, depth + 1)
 
     walk("document", 0)
-    return _page(doc, "assembly", "assembly-tree", f"【STEP · 装配树 {doc.filename}】", "\n".join(lines),
-                 extra_meta={"cad_entity_type": "assembly"})
+    # cad_entity_uid 指向真实可解引用的根装配实体（而非合成 "assembly-tree"），
+    # 使 search_engineering_objects 命中后 get_cad_entity(document_id, entity_uid) 可用。
+    root_asm = next((e for e in asms if e.parent_uid == "document"), asms[0])
+    return _page(doc, "assembly", root_asm.entity_uid, f"【STEP · 装配树 {doc.filename}】",
+                 "\n".join(lines), extra_meta={"cad_entity_type": "assembly"})
 
 
 # ── STL ─────────────────────────────

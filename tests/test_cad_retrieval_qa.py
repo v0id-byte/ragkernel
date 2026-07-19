@@ -125,3 +125,18 @@ def test_conflict_retrieval_distinguishes_documents(ingest, cad_db):
     rows = _bm25(cad_db, "Box 零件 包围盒")
     doc_ids = {r["document_id"] for r in rows if "Box" in (r["text"] or "")}
     assert len(doc_ids) >= 2      # 两个不同文档的同名零件都被检索到、可按文档区分
+
+
+def test_search_engineering_objects_scoped_to_cad(ingest, cad_db, toolbox, tmp_path, monkeypatch):
+    """search_engineering_objects 只应返回 CAD 片——普通文档片（entity_uid=null）不得混入。"""
+    import numpy as np
+    from ragkernel import embed, pipeline
+    md = tmp_path / "note.md"
+    md.write_text("# Box 规格\n这个 Box 重 5kg、蓝色，是普通文档不是 CAD。\n", encoding="utf-8")
+    pipeline.ingest_file(str(md), db=cad_db, do_embed=False)   # 非 CAD 文档，含 "Box"
+    ingest("box.step")                                          # CAD 文档，含零件 "Box"
+    # 桩掉嵌入避免加载模型；无向量时走 BM25，检验 where 作用域过滤
+    monkeypatch.setattr(embed, "embed", lambda texts: np.zeros((len(texts), 1024), dtype="float32"))
+    out = json.loads(toolbox.search_engineering_objects("Box"))
+    assert out["matches"]                                       # 有命中
+    assert all(m["cad_entity_type"] is not None for m in out["matches"])   # 全为 CAD 片，无 null
