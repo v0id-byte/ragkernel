@@ -1,7 +1,7 @@
 [project]
 name = "ragkernel"
 version = "0.1.0"
-description = "本地优先的企业 RAG 内核：混合检索 + 重排 + 带引用问答，傻瓜式自动索引"
+description = "Verifiable engineering knowledge engine for documents, CAD models, humans, and AI agents"
 requires-python = ">=3.12,<3.14"  # onnxruntime(RapidOCR 依赖)暂无 cp314 轮子，封顶避免 uv 选到 3.14 装不上
 dependencies = [
     "anthropic>=0.40",
