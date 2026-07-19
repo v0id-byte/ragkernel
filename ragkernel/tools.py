@@ -150,6 +150,45 @@ class Toolbox:
             )
         return self._search(query, k, f"{col} = ?", (value,), restore=False)
 
+    def collect_evidence(self, claim: str, document_ids: list[int] | None = None,
+                         model: str | None = None, top_k: int = 8,
+                         max_chars: int = 24000) -> list[dict]:
+        """给 verify 收集**有范围过滤的原子证据**（绝不整篇 read_document 灌进 LLM）。
+        document_ids/model 只作检索范围过滤（走 hybrid_search 的 where seam，两路都过滤）。
+        返回 [{"id":"E1","ref":"[D..#.. p.. · 分类]","text":...}]，各带真实引用；总量截到 max_chars。"""
+        clauses, ps = [], []
+        if document_ids:
+            ph = ",".join("?" * len(document_ids))
+            clauses.append(f"c.document_id IN ({ph})")
+            ps.extend(int(d) for d in document_ids)
+        if model:
+            clauses.append("json_extract(c.meta_json,'$.model') = ?")
+            ps.append(model)
+        where = " AND ".join(clauses)
+        qvec = embed.embed([claim])[0]
+        rows = search.hybrid_search(
+            self.db, claim, qvec, k=top_k, where=where, params=tuple(ps),
+            reranker=self._reranker(), candidates=self._candidates(),
+        )
+        rows = self.vertical.post_retrieve(claim, rows)
+        self._track(rows)
+        self.audit("tool:collect_evidence", {"claim": claim, "where": where, "hits": [r["id"] for r in rows]})
+        out, used = [], 0
+        for i, r in enumerate(rows, 1):
+            text = r["text"] or ""
+            if used + len(text) > max_chars:
+                text = text[: max(0, max_chars - used)]
+            if not text:
+                break
+            out.append({"id": f"E{i}", "ref": self._cite(r), "text": text})
+            used += len(text)
+        return out
+
+    def reset_call_state(self) -> None:
+        """一次工具调用结束后清引用轨迹。MCP 长生命周期 session 复用同一 Toolbox，
+        不清 touched 会无限增长（Web 侧本来就每问一轮后 clear，此处给个正式入口）。"""
+        self.touched.clear()
+
     def read_document(self, document_id: int) -> str:
         rows = self.db.execute(
             "SELECT * FROM chunks WHERE document_id=? ORDER BY chunk_index", (int(document_id),)

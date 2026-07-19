@@ -20,6 +20,7 @@ dependencies = [
     "docling>=2.113.0",
     "rapidocr-onnxruntime>=1.4.4",
     "onnxruntime>=1.20.1",
+    "mcp>=1.27.2,<2",  # MCP Server（Agent 接口）；1.27.2 含 transport session↔principal 绑定安全修复，<2 避开 v2 预发布破坏性 API
 ]
 
 [project.scripts]

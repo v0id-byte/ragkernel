@@ -89,6 +89,67 @@ def cmd_users(args):
         print(f"已启用用户 {args.user_id}")
 
 
+def cmd_mcp(args):
+    import os
+
+    if args.warm:  # 只预热 embed/rerank，不发 provider 请求；stdio 下走 stderr（stdout 是协议流）
+        from . import embed, rerank
+
+        print("预热 embedding / rerank 模型…", file=sys.stderr)
+        embed.embed(["warmup"])
+        rerank.get()
+    if args.transport == "stdio":
+        from .mcp import run_stdio
+
+        run_stdio()
+    else:
+        mcfg = config.settings().get("mcp", {}) or {}
+        host = os.environ.get("RAGKERNEL_MCP_HOST") or args.host or mcfg.get("host", "127.0.0.1")
+        port = int(os.environ.get("RAGKERNEL_MCP_PORT") or args.port or mcfg.get("port", 8765))
+        from .mcp.http import run_http
+
+        run_http(host, port)
+
+
+def cmd_token(args):
+    from . import auth
+
+    if args.token_cmd == "new":
+        uid = auth.user_id_by_username(args.user)
+        if not uid:
+            print(f"没有这个用户：{args.user}（先 `ragkernel users add {args.user}`）")
+            return
+        try:
+            tok = auth.issue_token(uid, ttl_days=args.days, label=args.label, token_kind="agent")
+        except Exception:
+            print(f"签发失败：label「{args.label}」可能已存在——先 revoke 或换个 label")
+            return
+        print(f"agent token（user={args.user} · label={args.label or '无'} · {args.days} 天）：\n\n{tok}\n")
+        print("⚠️  只显示这一次。贴进 Agent 配置的 Authorization: Bearer；服务端只存哈希，丢了只能重发。")
+    elif args.token_cmd == "list":
+        rows = auth.list_tokens(args.user)
+        if not rows:
+            print("（没有 agent token）")
+            return
+        for r in rows:
+            import time as _t
+
+            exp = _t.strftime("%Y-%m-%d", _t.localtime(r["expires_at"])) if r["expires_at"] else "?"
+            seen = _t.strftime("%Y-%m-%d", _t.localtime(r["last_seen_at"])) if r["last_seen_at"] else "-"
+            print(f"  {r['id_short']}  {r['username']:<12} label={r['label'] or '-':<16} 过期 {exp}  最近 {seen}")
+    elif args.token_cmd == "revoke":
+        if args.user:  # label 撤销必须带 --user
+            uid = auth.user_id_by_username(args.user)
+            res = auth.revoke_agent_token(user_id=uid, label=args.target)
+        else:          # 否则按 hash 前缀
+            res = auth.revoke_agent_token(hash_prefix=args.target)
+        if res.get("deleted"):
+            print(f"已撤销 {res['id_short']}")
+        else:
+            extra = f"（候选：{', '.join(res['matches'])}）" if res.get("matches") else ""
+            print(f"未撤销：{res.get('error')}{extra}")
+
+
 def main():
     config.load_env()
     ap = argparse.ArgumentParser(prog="ragkernel", description="本地优先的企业 RAG 内核")
@@ -121,6 +182,26 @@ def main():
     pe = users_sub.add_parser("activate", help="启用用户")
     pe.add_argument("user_id", type=int)
 
+    p = sub.add_parser("mcp", help="MCP Server（把只读检索暴露给 Agent）")
+    mcp_sub = p.add_subparsers(dest="mcp_cmd", required=True)
+    ps = mcp_sub.add_parser("serve", help="启动 MCP Server")
+    ps.add_argument("--transport", choices=["http", "stdio"], default="http", help="默认 http（远程）；stdio 供本地/air-gap")
+    ps.add_argument("--host", default=None, help="默认 127.0.0.1；绑 0.0.0.0 会提示需 HTTPS")
+    ps.add_argument("--port", type=int, default=None, help="默认 8765")
+    ps.add_argument("--warm", action="store_true", help="启动前预热 embedding/rerank 模型（不发 provider 请求）")
+
+    p = sub.add_parser("token", help="agent token 管理（MCP 鉴权用的个人访问令牌）")
+    token_sub = p.add_subparsers(dest="token_cmd", required=True)
+    tn = token_sub.add_parser("new", help="签发 agent token（只显示一次）")
+    tn.add_argument("--user", required=True, help="令牌归属的用户名")
+    tn.add_argument("--label", default=None, help="标签，便于识别与撤销（如 claude-code）")
+    tn.add_argument("--days", type=int, default=365, help="有效天数，默认 365")
+    tl = token_sub.add_parser("list", help="列出 agent token")
+    tl.add_argument("--user", default=None, help="只看某用户")
+    tr = token_sub.add_parser("revoke", help="撤销 agent token")
+    tr.add_argument("--user", default=None, help="按 label 撤销时必填")
+    tr.add_argument("target", help="label（配 --user）或 token hash 前缀（≥8 位）")
+
     args = ap.parse_args()
     if args.cmd == "ingest":
         cmd_ingest(args.path, args.no_embed)
@@ -136,6 +217,10 @@ def main():
         cmd_watch(args.dir)
     elif args.cmd == "users":
         cmd_users(args)
+    elif args.cmd == "mcp":
+        cmd_mcp(args)
+    elif args.cmd == "token":
+        cmd_token(args)
     elif args.cmd == "serve":
         from . import webapp
 
