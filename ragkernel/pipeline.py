@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from . import config, connectors, store
-from .chunking import seg, split_note
+from .chunking import compose_context, model_hint, seg, split_note
 from .verticals import get_vertical
 
 
@@ -44,10 +44,12 @@ def _mark_embedded(db) -> None:
 
 
 def _build_chunks(db, doc_id: int, pages, mod) -> list[dict]:
-    """按垂直层拆片 + 打分类;table 类连接器(ATOMIC)整条一片。"""
+    """按垂直层拆片 + 打分类 + 前置上下文前缀;table 类连接器(ATOMIC)整条一片。"""
     v = get_vertical()
     atomic = getattr(mod, "ATOMIC", False)
     min_c, max_c = _chunk_params()
+    doc_row = dict(db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone())
+    model = model_hint(doc_row.get("filename") or "")
     chunk_dicts: list[dict] = []
     idx = 0
     for page in pages:
@@ -63,19 +65,23 @@ def _build_chunks(db, doc_id: int, pages, mod) -> list[dict]:
         for title, body, meta in pieces:
             if not body.strip():
                 continue
-            head = (title + "\n" + body) if title else body
+            if model:
+                meta = {**meta, "model": model}
+            # 确定性上下文前缀（型号·章节·表标题）前置进正文——同时进 embedding 与 BM25
+            ctx = compose_context(model, meta)
+            text = (ctx + "\n" + body) if ctx else body
+            head = (title + "\n" + text) if title else text
             chunk_dicts.append({
                 "document_id": doc_id,
                 "chunk_index": idx,
                 "title": title or None,
                 "page_no": page.page_no,
-                "text": body,
+                "text": text,
                 "text_seg": seg(head),
                 "meta_json": json.dumps(meta, ensure_ascii=False) if meta else None,
-                "content_hash": store.content_hash(doc_id, idx, body),
+                "content_hash": store.content_hash(doc_id, idx, text),
             })
             idx += 1
-    doc_row = dict(db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone())
     return v.on_ingest(doc_row, chunk_dicts)
 
 

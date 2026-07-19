@@ -1,7 +1,7 @@
 """检索质量评测：Recall@k / MRR，rerank on/off 对比（可复现）。
 
-读 eval/qa.jsonl，每行 {"question": "...", "expect": "应命中的原文子串"}。
-先摄取对应语料（如 smoke 样例），再跑：
+读 eval/qa.jsonl，每行 {"question": "...", "expect": "应命中的原文子串"}；
+自动摄取 eval/corpus/ 下的语料（幂等），无需手工准备。跑：
   uv run python scripts/eval_retrieval.py          # on/off 都跑
   uv run python scripts/eval_retrieval.py off       # 仅纯 RRF
   uv run python scripts/eval_retrieval.py on        # 仅带 reranker
@@ -11,12 +11,24 @@ import json
 import sys
 from pathlib import Path
 
-from ragkernel import config, embed, rerank, search, store
+from ragkernel import config, connectors, embed, pipeline, rerank, search, store
 
 config.load_env()
 
-QA = Path(__file__).resolve().parent.parent / "eval" / "qa.jsonl"
+ROOT = Path(__file__).resolve().parent.parent
+QA = ROOT / "eval" / "qa.jsonl"
+CORPUS = ROOT / "eval" / "corpus"
 K = 8
+
+
+def _ensure_corpus() -> None:
+    """幂等摄取 eval/corpus 下的语料（sha256 命中即跳过），让评测自足可复现。"""
+    if not CORPUS.exists():
+        return
+    exts = connectors.supported_exts()
+    for f in sorted(CORPUS.rglob("*")):
+        if f.suffix.lower() in exts:
+            pipeline.ingest_file(f)
 
 
 def _run(use_rerank: bool) -> dict:
@@ -44,6 +56,7 @@ def main():
     if not QA.exists():
         print(f"缺 {QA}。先建标注集：每行 {{'question':..,'expect':..}}，并摄取对应语料。")
         return
+    _ensure_corpus()
     mode = sys.argv[1] if len(sys.argv) > 1 else "both"
     if mode in ("off", "both"):
         print("纯 RRF   ", _run(False))

@@ -82,18 +82,18 @@ class Toolbox:
 
     # ── 工具实现 ──────────────────────────────────────────────
 
-    def search_documents(self, query: str, k: int = 8, category: str | None = None) -> str:
+    # 可按 meta_json 字段过滤检索的白名单（垂直层拆片时写入这些键）。
+    FILTERABLE = ("category", "element_type", "fault_code", "pin_label", "model", "table_subtype")
+
+    def _search(self, query: str, k: int, where: str = "", params: tuple = ()) -> str:
         qvec = embed.embed([query])[0]
-        where, params = "", ()
-        if category:
-            where, params = "json_extract(c.meta_json,'$.category') = ?", (category,)
         rows = search.hybrid_search(
             self.db, query, qvec, k=k, where=where, params=params,
             reranker=self._reranker(), candidates=self._candidates(),
         )
         rows = self.vertical.post_retrieve(query, rows)  # 垂直层检索后 hook
         self._track(rows)
-        self.audit("tool:search_documents", {"query": query, "hits": [r["id"] for r in rows]})
+        self.audit("tool:search", {"query": query, "where": where, "hits": [r["id"] for r in rows]})
         if not rows:
             return "（无结果）"
         win = self._restore_win()
@@ -102,6 +102,18 @@ class Toolbox:
             body = self._restore_window(r["document_id"], r["chunk_index"], win) if win > 0 else r["text"]
             parts.append(self._cite(r) + "\n" + (body or r["text"]))
         return "\n────\n".join(parts)
+
+    def search_documents(self, query: str, k: int = 8, category: str | None = None) -> str:
+        where, params = ("", ())
+        if category:
+            where, params = "json_extract(c.meta_json,'$.category') = ?", (category,)
+        return self._search(query, k, where, params)
+
+    def search_by_meta(self, query: str, field: str, value: str, k: int = 8) -> str:
+        """只在某个 meta 字段=某值的片里检索（如 field='fault_code' value='E-42'）。"""
+        if field not in self.FILTERABLE:
+            return f"（不支持的过滤字段 {field}；可用：{', '.join(self.FILTERABLE)}）"
+        return self._search(query, k, f"json_extract(c.meta_json,'$.{field}') = ?", (value,))
 
     def read_document(self, document_id: int) -> str:
         rows = self.db.execute(

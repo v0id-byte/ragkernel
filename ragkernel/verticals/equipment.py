@@ -7,21 +7,25 @@
 
 import re
 
+from .. import config
+from ..chunking import chunk_blocks, md_to_blocks
 from . import register
 
-# 条目/字段边界:markdown 标题、故障代码、报警码、字段标签、编号列表
-_ENTRY = re.compile(
-    r"^(?:"
-    r"#{1,6}\s+.+"
-    r"|故障代码[:：]?\s*\S.*"
-    r"|(?:报警|错误|故障)[码代号].*"
-    r"|E-?\d+\b.*"
-    r"|(?:现象|症状|原因|处理|措施|方法|步骤|解决|操作|警告|注意|备注)[:：].*"
-    r"|\d+[.、]\s*\S.*"
-    r"|[一二三四五六七八九十]+[、.]\s*\S.*"
-    r")$",
-    re.M,
-)
+# 领域精确键抽取:故障码 / 针脚——写进 meta 供 BM25 精确命中 + 按字段过滤。
+_FAULT = re.compile(r"E-?\d{1,4}|F\d{2,5}|报警\s*\d{1,4}|Err?\.?\s*\d{1,4}")
+_PIN = re.compile(r"\bP\d{1,3}\b")
+
+
+def _enrich(meta: dict, body: str) -> None:
+    """给一片补领域精确键（故障码/针脚），供混合检索精确命中与元数据过滤。"""
+    fc = _FAULT.search(body)
+    if fc:
+        meta["fault_code"] = fc.group(0)
+    if meta.get("element_type") in ("kv", "table"):
+        pin = _PIN.search(body)
+        if pin:
+            meta["pin_label"] = pin.group(0)
+
 
 # 分类关键词首命中表(安全警告优先——安全相关必须先被识别)
 _RULES = [
@@ -54,35 +58,29 @@ class Equipment:
             "凡涉及安全警告(断电/防护/危险)务必置于最前提醒;"
             "查不到就如实说明,绝不臆测维修方案——错误维修可能造成安全事故。"
             "可先调用 list_categories 看有哪些分类,再用 search_by_category 在'处理步骤'/'故障现象'等类别里精准检索;"
+            "遇到明确的故障码/针脚/型号时,用 search_by_field(如 field='fault_code',value='E-42')精确定位那一条;"
             "涉及具体型号时,优先引用同型号设备的既往处理记录(故障案例)。"
         )
 
     def split(self, page_text: str, page_no: int | None):
+        """markdown → 有类型元素 → 元素级分块（表格按行/工序整片/键值逐条/正文按大小），
+        每片打分类 + 补领域精确键。内核只认 (title, body, meta) 三元组，故拆片智能全在此。"""
         text = (page_text or "").strip()
         if not text:
             return []
-        marks = list(_ENTRY.finditer(text))
-        if not marks:
-            paras = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
-            if not paras:
-                return None
-            return [(self._title(p), p, {"category": classify(p), "by": "rule"}) for p in paras]
-        pieces: list[tuple[str, str]] = []
-        head = text[: marks[0].start()].strip()
-        if head:
-            pieces.append(("", head))
-        for i, m in enumerate(marks):
-            end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
-            body = text[m.start() : end].strip()
-            title = re.sub(r"^#{1,6}\s+", "", m.group(0)).strip()[:60]
-            pieces.append((title, body))
-        return [(t, b, {"category": classify(b), "by": "rule"}) for t, b in pieces if b]
+        ch = config.settings().get("chunking") or {}
+        min_c, max_c = int(ch.get("min_chars", 200)), int(ch.get("max_chars", 3000))
+        out = []
+        for title, body, meta in chunk_blocks(md_to_blocks(text), min_c, max_c):
+            m = dict(meta)
+            m["category"] = classify(body)
+            m["by"] = "rule"
+            _enrich(m, body)
+            out.append((title, body, m))
+        return out
 
     def classify(self, text: str) -> str:
         return classify(text)
-
-    def _title(self, body: str) -> str:
-        return body.splitlines()[0].strip()[:60] if body else ""
 
     def extra_tools(self, toolbox):
         def list_categories() -> str:
@@ -97,6 +95,9 @@ class Equipment:
 
         def search_by_category(query: str, category: str, k: int = 8) -> str:
             return toolbox.search_documents(query, k=k, category=category)
+
+        def search_by_field(query: str, field: str, value: str, k: int = 8) -> str:
+            return toolbox.search_by_meta(query, field, value, k=k)
 
         specs = [
             {
@@ -117,8 +118,30 @@ class Equipment:
                     "required": ["query", "category"],
                 },
             },
+            {
+                "name": "search_by_field",
+                "description": (
+                    "按元数据字段精确过滤检索。field 可选:element_type(table/procedure/kv/prose)、"
+                    "fault_code(故障码如 E-42)、pin_label(针脚如 P3)、model(设备型号)、"
+                    "table_subtype(故障码表/针脚表/参数表/备件表)。例:field='fault_code',value='E-42' 只查该故障码那行。"
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "field": {"type": "string"},
+                        "value": {"type": "string"},
+                        "k": {"type": "integer"},
+                    },
+                    "required": ["query", "field", "value"],
+                },
+            },
         ]
-        return specs, {"list_categories": list_categories, "search_by_category": search_by_category}
+        return specs, {
+            "list_categories": list_categories,
+            "search_by_category": search_by_category,
+            "search_by_field": search_by_field,
+        }
 
     def post_retrieve(self, query: str, chunks: list) -> list:
         return chunks

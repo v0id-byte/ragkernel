@@ -1,2 +1,11 @@
 {"question": "入职满一年有多少天年假", "expect": "15 天"}
 {"question": "差旅报销的时限是多久", "expect": "30 天内提交发票"}
+{"question": "主轴过温报警E-42怎么处理", "expect": "检查冷却风扇是否转动"}
+{"question": "编码器断线故障如何排除", "expect": "重新插紧编码器插头"}
+{"question": "母线过压F0022的处理方法", "expect": "更换制动电阻"}
+{"question": "过流保护A-03怎么办", "expect": "排除机械卡阻后重启"}
+{"question": "电机W相接哪个端子", "expect": "电机 W 相"}
+{"question": "编码器A+是哪个针脚", "expect": "编码器 A+"}
+{"question": "更换主轴轴承的扭矩是多少", "expect": "扭矩 12 N·m"}
+{"question": "额定输出功率是多大", "expect": "5.5"}
+{"question": "维修前要等待电容放电多久", "expect": "放电至少 5 分钟"}
