@@ -20,21 +20,23 @@ MIME = "text/markdown"
 _conv: dict[bool, object] = {}
 
 
-def _converter(force_ocr: bool = False):
-    """普通转换器复用文本层 + 图片区域 OCR；force_ocr=True 整页当图片 OCR（救扫描/图片型 PDF）。"""
-    if force_ocr not in _conv:
+def _converter(ocr: bool):
+    """ocr=False：born-digital 快路径——只用文本层 + Docling 版面/表格模型，不跑 OCR（省时）。
+    ocr=True：整页强制 OCR（救扫描件/图片型 PDF 无文本层的情形）。两者都保留 TableFormer 表结构。"""
+    if ocr not in _conv:
         from docling.datamodel.base_models import InputFormat
         from docling.datamodel.pipeline_options import PdfPipelineOptions, RapidOcrOptions
         from docling.document_converter import DocumentConverter, PdfFormatOption
 
         opts = PdfPipelineOptions()
         opts.do_table_structure = True   # TableFormer：还原行列/合并单元格
-        opts.do_ocr = True               # 扫描/图片区域走 OCR；born-digital 用文本层
-        opts.ocr_options = RapidOcrOptions(force_full_page_ocr=force_ocr)  # 中英文 RapidOCR（离线 ONNX）
-        _conv[force_ocr] = DocumentConverter(
+        opts.do_ocr = ocr
+        if ocr:
+            opts.ocr_options = RapidOcrOptions(force_full_page_ocr=True)  # 中英文 RapidOCR（离线 ONNX）
+        _conv[ocr] = DocumentConverter(
             format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=opts)}
         )
-    return _conv[force_ocr]
+    return _conv[ocr]
 
 
 def _pages_markdown(doc) -> list[Page]:
@@ -68,12 +70,12 @@ def _pages_markdown(doc) -> list[Page]:
 def load(path) -> list[Page]:
     path = Path(path)
     try:
-        doc = _converter().convert(str(path)).document
+        doc = _converter(ocr=False).convert(str(path)).document  # 快路径：born-digital 免 OCR
         pages = _pages_markdown(doc)
         # 文本稀疏（扫描件/整页图片型 PDF，无文本层）→ 整页强制 OCR 重试
         npages = doc.num_pages() or 1
         if sum(len(p.text) for p in pages) < 40 * npages:
-            doc = _converter(force_ocr=True).convert(str(path)).document
+            doc = _converter(ocr=True).convert(str(path)).document
             pages = _pages_markdown(doc) or pages
         if pages:
             return pages
