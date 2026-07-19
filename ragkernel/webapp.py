@@ -18,11 +18,25 @@ _lock = threading.Lock()
 STATIC = Path(__file__).parent / "static"
 
 
+_CAD_EXTS = {".step", ".stp", ".stl"}
+
+
 def _upcfg() -> dict:
     return config.settings().get("upload") or {}
 
 
-app.config["MAX_CONTENT_LENGTH"] = int(_upcfg().get("max_file_mb", 50)) * 1024 * 1024
+def _cad_max_mb() -> int:
+    return int((config.settings().get("cad") or {}).get("max_file_mb", 250))
+
+
+def _ext_max_mb(ext: str) -> int:
+    """按扩展名的大小上限：CAD 走 cad.max_file_mb（可大），其余走 upload.max_file_mb。"""
+    return _cad_max_mb() if ext in _CAD_EXTS else int(_upcfg().get("max_file_mb", 50))
+
+
+# Flask 传输层上限取二者较大值，避免大 CAD 文件在到达 ingest 前就被 50MB 全局上限拒掉；
+# 真正的按扩展名上限在 upload() 内落地（非 CAD 仍受 upload.max_file_mb 约束）。
+app.config["MAX_CONTENT_LENGTH"] = max(int(_upcfg().get("max_file_mb", 50)), _cad_max_mb()) * 1024 * 1024
 
 
 def _rl() -> dict:
@@ -200,6 +214,11 @@ def upload():
     safe = Path(f.filename).name  # 去路径，防目录穿越
     dest = updir / safe
     f.save(dest)
+
+    cap = _ext_max_mb(ext) * 1024 * 1024  # 按扩展名落地上限：CAD 250MB、其余 50MB
+    if dest.stat().st_size > cap:
+        dest.unlink(missing_ok=True)
+        return jsonify({"error": f"文件过大（{ext} 上限 {_ext_max_mb(ext)}MB）"}), 413
 
     q: queue.Queue = queue.Queue()
 

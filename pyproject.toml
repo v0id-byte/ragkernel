@@ -26,6 +26,18 @@ dependencies = [
 [project.scripts]
 ragkernel = "ragkernel.cli:main"
 
+[project.optional-dependencies]
+# 原生 CAD 摄取（STEP/STL）。重二进制轮子，故作可选 extra、后端内惰性导入——缺失时内核照常启动。
+# STEP=OpenCASCADE(OCP) XDE；novtk 变体去掉 VTK（省 ~100MB，适合无头/离线服务端），
+# 平台若无 novtk 轮子可回退 cadquery-ocp（含 VTK）。STL=trimesh(MIT，仅需 numpy)。
+cad = [
+    "cadquery-ocp-novtk>=7.9",  # 或 cadquery-ocp（含 VTK）作跨平台回退
+    "trimesh>=4.6",
+]
+dev = [
+    "pytest>=8.0",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
