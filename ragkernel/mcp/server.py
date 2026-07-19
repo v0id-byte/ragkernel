@@ -66,7 +66,11 @@ _current: ContextVar[SessionCtx] = ContextVar("ragkernel_mcp_session")
 _model_limiter = anyio.CapacityLimiter(1)
 _db_limiter = anyio.CapacityLimiter(4)
 _verify_limiter = anyio.CapacityLimiter(1)
-_LIGHT = {"list_documents", "list_categories", "read_document"}
+_LIGHT = {"list_documents", "list_categories", "read_document",
+          # 原生 CAD 只读结构化查询（纯 sqlite 读，不推理）→ 并发限流；
+          # search_engineering_objects 会 embed，故不在此列（走串行模型限流）。
+          "inspect_cad_document", "list_cad_entities", "get_cad_entity",
+          "get_assembly_tree", "query_geometry", "compare_cad_entities"}
 
 
 def current_ctx() -> SessionCtx:
