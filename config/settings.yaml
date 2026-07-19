@@ -43,7 +43,18 @@ web:
 
 upload:
   max_file_mb: 50
-  allowed_ext: [.pdf, .docx, .pptx, .html, .htm, .md, .markdown, .txt, .csv, .xlsx]
+  allowed_ext: [.pdf, .docx, .pptx, .html, .htm, .md, .markdown, .txt, .csv, .xlsx, .step, .stp, .stl]
+
+# 原生 CAD 摄取上限（超限则中止并保留 rejected 记录，不静默截断）。见 cad/limits.py DEFAULTS。
+cad:
+  max_file_mb: 250
+  max_triangles: 5000000
+  max_entities: 10000
+  max_assembly_depth: 64
+  max_seconds: 120
+  ext_ref_depth: 0
+  max_stl_component_chunks: 16
+  face_component_max_triangles: 200000
 
 ratelimit:
   ask_per_min: 30

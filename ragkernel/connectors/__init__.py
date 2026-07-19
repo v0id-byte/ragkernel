@@ -2,12 +2,13 @@
 
 from pathlib import Path
 
-from . import layout, markdown, richdoc, table, text
+from . import cad, layout, markdown, richdoc, table, text
 
 # layout（Docling+RapidOCR）接管 PDF（版面+OCR+表格，回退 MarkItDown→pypdf）；
 # richdoc（MarkItDown）接管 docx/pptx/html。layout 在 richdoc 之后登记，故 .pdf 归 layout。
 # pdf.py/docx.py 仍在，作为各自回退（不单独登记）。
-_MODULES = (richdoc, layout, markdown, text, table)
+# cad（STEP/STL）暴露 load_bundle+PRECHUNKED；重依赖惰性导入，此处登记不触发 OCP/trimesh。
+_MODULES = (richdoc, layout, markdown, text, table, cad)
 _REGISTRY: dict[str, object] = {}
 for _mod in _MODULES:
     for _ext in _mod.EXTS:
