@@ -8,7 +8,7 @@
 import re
 
 from .. import config
-from ..chunking import chunk_blocks, md_to_blocks
+from ..chunking import _DIMENSION, chunk_blocks, md_to_blocks
 from . import register
 
 # 领域精确键抽取:故障码 / 针脚——写进 meta 供 BM25 精确命中 + 按字段过滤。
@@ -22,8 +22,8 @@ _FAULT = re.compile(
     r"|报警\s*\d{1,4}|故障码?\s*\d{1,4}",
     re.I,
 )
-# 针脚/端子:P3 · PA0/PB12(MCU) · GPIO46 · IO0
-_PIN = re.compile(r"\bP[A-F]?\d{1,3}\b|\bGPIO\d{1,2}\b|\bIO\d{1,2}\b", re.I)
+# 针脚/端子:P3 · PA0/PB12(MCU) · GPIO46 · IO0 · U1/V1/W1(电机相端子)
+_PIN = re.compile(r"\bP[A-F]?\d{1,3}\b|\b[UVW]\d{1,2}\b|\bGPIO\d{1,2}\b|\bIO\d{1,2}\b", re.I)
 # 连接器-针脚:CN1-12 / X1:12 / J3-5 / TB2-4 → 归一为 connector + pin_number
 _CONN_PIN = re.compile(r"\b(CN|TB|J|X|K)\s?(\d{1,2})\s?[-:_]\s?(\d{1,2})\b", re.I)
 
@@ -43,13 +43,14 @@ def _dim_type(raw: str) -> str:
     return "size" if re.search(r"[x×]", r) else "length"
 
 
-def _pnorm(s: str) -> str:
-    return re.sub(r"[-.:_ ]", "", s).lower()
+def _pin_key(s: str) -> str:
+    """针脚归一 token：保连接器:针脚结构（CN1-12→cn1:12, CN11-2→cn11:2 不撞），plain 针脚小写。"""
+    return re.sub(r"[-_ ]+", ":", (s or "").strip()).lower()
 
 
 def _enrich(meta: dict, body: str) -> None:
     """给一片补领域精确键（故障码/针脚/连接器/尺寸类型），供混合检索精确命中与元数据过滤。
-    一片里可能出现多个针脚（未拆行的 kv），全部收进 pin_normalized（空格分隔归一 token），
+    一片可能有多个针脚/多种尺寸（未拆行的 kv、含多尺寸的段落），全部收进空格分隔 token，
     让 search_by_field 能精确命中其中任一个（而非只有第一个）。"""
     fc = _FAULT.search(body)
     if fc:
@@ -57,23 +58,33 @@ def _enrich(meta: dict, body: str) -> None:
     et = meta.get("element_type")
     if et in ("kv", "table", "dimension"):
         conns = _CONN_PIN.findall(body)   # [(prefix, num, pin), ...]
-        pins = _PIN.findall(body)          # [str, ...]
         keys, labels = [], []
         for pfx, num, pn in conns:
             conn = (pfx + num).upper()
-            keys.append(_pnorm(f"{conn}:{pn}"))
+            keys.append(_pin_key(f"{conn}:{pn}"))   # cn1:12（保结构，不撞 cn11:2）
             labels.append(f"{conn}-{pn}")
-        for p in pins:
-            keys.append(_pnorm(p))
+        for p in _PIN.findall(body):
+            keys.append(_pin_key(p))                 # p3 / u1 / pa0
             labels.append(p)
         if conns:  # 首个连接器-针脚给 connector/pin_number（单针脚常见场景）
             meta["connector"] = (conns[0][0] + conns[0][1]).upper()
             meta["pin_number"] = conns[0][2]
         if keys:
-            meta["pin_normalized"] = " ".join(dict.fromkeys(keys))    # 归一 token，容多针脚
+            meta["pin_normalized"] = " ".join(dict.fromkeys(keys))
             meta["pin_label"] = " ".join(dict.fromkeys(labels))
-    if meta.get("dimension_raw"):  # 尺寸类型:只要含尺寸就打(含较长段落里的尺寸,不限 dimension 片)
-        meta["dimension_type"] = _dim_type(meta["dimension_raw"])
+    # 尺寸类型:收该片里所有尺寸的类型（一段多尺寸 → thread/size/angle 都要能被 search_by_field 命中）
+    types = sorted({_dim_type(m.group(0)) for m in _DIMENSION.finditer(body)})
+    if types:
+        meta["dimension_type"] = " ".join(types)
+
+
+def _row_category(meta: dict) -> str | None:
+    """按元素/表子类型定分类，优先于关键词分类——否则参数表里含"防护等级/高压"的行会被
+    安全词覆盖成「安全警告」、工序含"断电"会被误判，从而在 search_by_category 里漏掉。
+    返回 None 表示走通用 classify（故障码表/针脚表的行内容各异，仍按关键词判）。"""
+    if meta.get("element_type") == "procedure":
+        return "处理步骤"
+    return {"参数表": "参数规格", "备件表": "备件"}.get(meta.get("table_subtype"))
 
 
 # 分类关键词首命中表(安全警告优先——安全相关必须先被识别)
@@ -122,9 +133,7 @@ class Equipment:
         out = []
         for title, body, meta in chunk_blocks(md_to_blocks(text), min_c, max_c):
             m = dict(meta)
-            # 工序整片恒归「处理步骤」——其首步常含"断电"等安全词,若按关键词分类会误判「安全警告」，
-            # 令 search_by_category('处理步骤') 漏掉真正的维修工序。
-            m["category"] = "处理步骤" if meta.get("element_type") == "procedure" else classify(body)
+            m["category"] = _row_category(meta) or classify(body)
             m["by"] = "rule"
             _enrich(m, body)
             out.append((title, body, m))

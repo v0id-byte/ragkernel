@@ -57,6 +57,8 @@ def _pages_markdown(doc) -> list[Page]:
     for item, _level in doc.iterate_items(traverse_pictures=True):
         prov = item.prov[0] if getattr(item, "prov", None) else None
         page = prov.page_no if prov else 1
+        # 已知局限：跨页长表用 prov[0] 的起始页承载整表 → 续页行的引用页码会偏到起始页。
+        # 彻底修需按单元格 provenance 逐行拆表（Docling markdown 导出已摊平，成本高），留后续。
         if page not in buckets:  # 新页开头继承上文章节路径
             buckets[page] = ["#" * min(lvl, 6) + " " + t for lvl, t in stack]
         if isinstance(item, TableItem):
@@ -95,12 +97,15 @@ def load(path) -> list[Page]:
         # 逐页判稀疏（而非全文平均）：混合 PDF 里少数扫描页不会被全文均值淹没。
         # 无文本页 = 根本没出现在 pages 里 → 计入稀疏。
         sparse = (npages - len(pages)) + sum(1 for p in pages if len(p.text) < 40)
-        if total < 5 * npages:                       # 几乎无文本层（整本扫描/图片）→ 整页强制 OCR
-            doc = _converter("full").convert(str(path)).document
-            pages = _pages_markdown(doc) or pages
-        elif sparse >= max(1, round(npages * 0.15)):  # 相当比例页稀疏（混合扫描/图纸）→ 区域 OCR，保文本层
-            doc = _converter("region").convert(str(path)).document
-            pages = _pages_markdown(doc) or pages
+        try:  # OCR 补扫失败（如 air-gap 缺 RapidOCR 模型）时保留非 OCR 结果，不要退回 MarkItDown 丢掉版面/表格
+            if total < 5 * npages:                       # 几乎无文本层（整本扫描/图片）→ 整页强制 OCR
+                doc = _converter("full").convert(str(path)).document
+                pages = _pages_markdown(doc) or pages
+            elif sparse >= max(1, round(npages * 0.15)):  # 相当比例页稀疏（混合扫描/图纸）→ 区域 OCR，保文本层
+                doc = _converter("region").convert(str(path)).document
+                pages = _pages_markdown(doc) or pages
+        except Exception as e:
+            print(f"[docling] OCR 补扫失败，保留非 OCR 结果：{type(e).__name__}: {e}")
         if pages:
             return pages
         raise ValueError("空解析结果")

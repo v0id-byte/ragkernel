@@ -21,8 +21,9 @@ QA = ROOT / "eval" / "qa.jsonl"
 CORPUS = ROOT / "eval" / "corpus"
 K = 8
 
-# 评测隔离到独立临时库（eval/eval_out，已 gitignore），绝不把合成夹具写进用户的 data/ KB。
-os.environ.setdefault("RAGKERNEL_DATA_DIR", str(ROOT / "eval" / "eval_out"))
+# 评测强制隔离到独立临时库（eval/eval_out，已 gitignore）——无条件覆盖，即使用户 shell/.env
+# 里已设 RAGKERNEL_DATA_DIR 指向真实 KB，也绝不把合成夹具写进去污染。
+os.environ["RAGKERNEL_DATA_DIR"] = str(ROOT / "eval" / "eval_out")
 
 
 def _ensure_corpus() -> None:
