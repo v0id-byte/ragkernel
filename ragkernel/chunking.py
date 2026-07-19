@@ -212,8 +212,15 @@ def _chunk_table(b: Block, tid: str, min_chars: int, out: list) -> None:
         out.append((title or subtype or "表格行", body, dict(base_meta)))
 
 
+def _trivial(body: str) -> bool:
+    """去掉数字/标点后不足 2 个实义字符（CJK 或字母）——图纸里孤立的尺寸数字/单字符噪声。"""
+    return len(re.sub(r"[\s\d.,:：;；\-–—+*/()|]", "", body)) < 2
+
+
 def _chunk_prose(b: Block, min_chars: int, max_chars: int, out: list) -> None:
     for t, body in split_note(b.text, min_chars, max_chars):
+        if _trivial(body):
+            continue
         sp = list(b.section_path)
         out.append((t or (sp[-1] if sp else ""), body, {"element_type": b.element_type, "section_path": sp}))
 
@@ -232,6 +239,8 @@ def chunk_blocks(blocks: list[Block], min_chars: int = 200, max_chars: int = 300
             out.append((title, body, {"element_type": "procedure", "section_path": list(b.section_path)}))
         elif b.element_type == "kv":
             line = b.text.strip()
+            if _trivial(line):
+                continue
             m = _KV.match(line) or _KV_DASH.match(line)
             key = (m.group(1).strip()[:40] if m else "")
             out.append((key, line, {"element_type": "kv", "section_path": list(b.section_path)}))
