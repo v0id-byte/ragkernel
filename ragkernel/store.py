@@ -48,6 +48,28 @@ CREATE TABLE IF NOT EXISTS chunks(
   content_hash TEXT UNIQUE NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(document_id, chunk_index);
+-- 原生 CAD 结构化工程层（与检索用 chunks 并存、双层表示）。免迁移：IF NOT EXISTS，旧库升级即得空表。
+-- 数值属性存 MeasuredValue（value/unit/source_method/representation/quality/validity）于 properties_json。
+-- provenance_json 只存 文件名/格式/sha/parser，绝不存服务端绝对路径。装配拓扑用 parent_uid + prototype_uid。
+CREATE TABLE IF NOT EXISTS engineering_entities(
+  id INTEGER PRIMARY KEY,
+  document_id INTEGER NOT NULL,
+  entity_uid TEXT NOT NULL,            -- 稳定标识（occurrence uid / prototype 的 XDE label tag 路径），跨重摄取可解释
+  entity_type TEXT NOT NULL,           -- document|assembly|component_instance|part|body|solid|shell|face|edge|mesh|material|layer
+  parent_uid TEXT,
+  prototype_uid TEXT,                  -- component_instance -> 其 part 原型
+  name TEXT,
+  assembly_path_json TEXT,
+  properties_json TEXT,                -- MeasuredValue 字典集合
+  geometry_json TEXT,                  -- bbox(local/world)/counts/面类型直方图/location_matrix
+  provenance_json TEXT,                -- 文件名/格式/sha/parser/warnings —— 无绝对路径
+  confidence TEXT,
+  UNIQUE(document_id, entity_uid)
+);
+CREATE INDEX IF NOT EXISTS idx_eng_doc    ON engineering_entities(document_id, entity_type);
+CREATE INDEX IF NOT EXISTS idx_eng_parent ON engineering_entities(document_id, parent_uid);
+CREATE INDEX IF NOT EXISTS idx_eng_proto  ON engineering_entities(document_id, prototype_uid);
+CREATE INDEX IF NOT EXISTS idx_eng_uid    ON engineering_entities(document_id, entity_uid);
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(text_seg, content='chunks', content_rowid='id');
 CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
   INSERT INTO chunks_fts(rowid, text_seg) VALUES (new.id, new.text_seg);
@@ -94,11 +116,11 @@ def get_document(db: sqlite3.Connection, sha256: str) -> sqlite3.Row | None:
     return db.execute("SELECT * FROM documents WHERE sha256=?", (sha256,)).fetchone()
 
 
-def upsert_document(
+def _upsert_document_tx(
     db: sqlite3.Connection, filename: str, sha256: str, source_path: str = "",
     mime: str = "", page_count: int = 0, meta_json: str = "", source_kind: str = "upload",
 ) -> tuple[int, bool]:
-    """按 sha256 幂等。返回 (document_id, existed)。"""
+    """upsert_document 的**不提交**版本，供同一事务内组合（CAD 原子摄取）。返回 (document_id, existed)。"""
     row = get_document(db, sha256)
     if row:
         return row["id"], True
@@ -108,8 +130,16 @@ def upsert_document(
         (filename, source_path or None, mime or None, sha256, page_count or None,
          "pending", source_kind, meta_json or None, int(time.time())),
     )
-    db.commit()
     return cur.lastrowid, False
+
+
+def upsert_document(
+    db: sqlite3.Connection, filename: str, sha256: str, source_path: str = "",
+    mime: str = "", page_count: int = 0, meta_json: str = "", source_kind: str = "upload",
+) -> tuple[int, bool]:
+    """按 sha256 幂等。返回 (document_id, existed)。"""
+    with db:  # 提交/回滚由上下文管理器负责
+        return _upsert_document_tx(db, filename, sha256, source_path, mime, page_count, meta_json, source_kind)
 
 
 def log_ingestion(db, document_id, filename, action, chunks=0, added=0, removed=0, ms=0):
@@ -141,6 +171,89 @@ def set_status(db: sqlite3.Connection, document_id: int, status: str) -> None:
     db.commit()
 
 
+def _set_status_tx(db: sqlite3.Connection, document_id: int, status: str) -> None:
+    """set_status 的不提交版本，供同一事务内使用。"""
+    db.execute("UPDATE documents SET status=? WHERE id=?", (status, document_id))
+
+
+# ── 原生 CAD：单次解析 + 原子写入（文档/chunks/工程实体同一事务，要么全落要么全不落）────────────
+
+def _replace_chunks_tx(db: sqlite3.Connection, document_id: int, chunks: list[dict]) -> tuple[int, int]:
+    """整文档替换式写 chunk（先删旧含向量，再插新）——**不提交、无 DDL/临时表**，可安全回滚。
+    仅供 CAD 原子路径；非 CAD 路径仍用带 stale-GC 的 upsert_chunks。返回 (新增, 删除)。"""
+    old = [r["id"] for r in db.execute("SELECT id FROM chunks WHERE document_id=?", (document_id,))]
+    for cid in old:
+        db.execute("DELETE FROM chunks_vec WHERE chunk_id=?", (cid,))
+    db.execute("DELETE FROM chunks WHERE document_id=?", (document_id,))  # 触发 chunks_ad 同步 FTS
+    for c in chunks:
+        db.execute(
+            """INSERT INTO chunks(document_id,chunk_index,title,page_no,text,text_seg,meta_json,content_hash)
+               VALUES(:document_id,:chunk_index,:title,:page_no,:text,:text_seg,:meta_json,:content_hash)""",
+            c,
+        )
+    return len(chunks), len(old)
+
+
+def _replace_engineering_entities_tx(db: sqlite3.Connection, document_id: int, rows: list[dict]) -> int:
+    """整文档替换式写工程实体——不提交。rows 的 *_json 字段应已是字符串（由 cad/normalize 生成）。返回写入行数。"""
+    db.execute("DELETE FROM engineering_entities WHERE document_id=?", (document_id,))
+    for r in rows:
+        db.execute(
+            """INSERT INTO engineering_entities(
+                 document_id,entity_uid,entity_type,parent_uid,prototype_uid,name,
+                 assembly_path_json,properties_json,geometry_json,provenance_json,confidence)
+               VALUES(:document_id,:entity_uid,:entity_type,:parent_uid,:prototype_uid,:name,
+                 :assembly_path_json,:properties_json,:geometry_json,:provenance_json,:confidence)""",
+            {"parent_uid": None, "prototype_uid": None, "name": None,
+             "assembly_path_json": None, "properties_json": None, "geometry_json": None,
+             "provenance_json": None, "confidence": None, **r, "document_id": document_id},
+        )
+    return len(rows)
+
+
+def upsert_engineering_entities(db: sqlite3.Connection, document_id: int, rows: list[dict]) -> int:
+    """公开入口：单独（自带事务）替换某文档的工程实体。"""
+    with db:
+        return _replace_engineering_entities_tx(db, document_id, rows)
+
+
+def ingest_cad_atomic(db: sqlite3.Connection, doc_fields: dict, build_chunks, entities: list[dict],
+                      status: str = "chunked") -> dict:
+    """CAD 原子摄取：文档 upsert + chunks 替换 + 工程实体替换 + 置状态，全部在**一个事务**内。
+    build_chunks(doc_id)->list[dict] 延迟到拿到 doc_id 后再构造 chunk（chunk 需 document_id/content_hash）。
+    任一步抛异常 → `with db:` 整体回滚，绝不留下「有 chunk 无实体却显示成功」。embedding 在本函数之外、事务提交后做。"""
+    with db:
+        doc_id, existed = _upsert_document_tx(db, **doc_fields)
+        chunks = build_chunks(doc_id)
+        added, removed = _replace_chunks_tx(db, doc_id, chunks)
+        n_ent = _replace_engineering_entities_tx(db, doc_id, entities)
+        _set_status_tx(db, doc_id, status)
+    return {"document_id": doc_id, "existed": existed, "chunks": len(chunks),
+            "added": added, "removed": removed, "entities": n_ent}
+
+
+def get_engineering_entities(db: sqlite3.Connection, document_id: int,
+                             entity_type: str | None = None) -> list[dict]:
+    if entity_type:
+        rows = db.execute(
+            "SELECT * FROM engineering_entities WHERE document_id=? AND entity_type=? ORDER BY id",
+            (document_id, entity_type),
+        ).fetchall()
+    else:
+        rows = db.execute(
+            "SELECT * FROM engineering_entities WHERE document_id=? ORDER BY id", (document_id,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_engineering_entity(db: sqlite3.Connection, document_id: int, entity_uid: str) -> dict | None:
+    row = db.execute(
+        "SELECT * FROM engineering_entities WHERE document_id=? AND entity_uid=?",
+        (document_id, entity_uid),
+    ).fetchone()
+    return dict(row) if row else None
+
+
 def upsert_chunks(db: sqlite3.Connection, document_id: int, chunks: list[dict]) -> tuple[int, int]:
     """幂等写入一个文档的全量 chunk；本次未出现的旧 chunk（含其向量）删除。返回 (新增, 删除)。"""
     db.execute("CREATE TEMP TABLE IF NOT EXISTS seen(hash TEXT PRIMARY KEY)")
@@ -170,11 +283,12 @@ def upsert_chunks(db: sqlite3.Connection, document_id: int, chunks: list[dict]) 
 
 
 def delete_document(db: sqlite3.Connection, document_id: int) -> int:
-    """级联删除：chunks_vec → chunks → documents。返回删掉的 chunk 数。"""
+    """级联删除：chunks_vec → chunks → engineering_entities → documents。返回删掉的 chunk 数。"""
     cids = [r["id"] for r in db.execute("SELECT id FROM chunks WHERE document_id=?", (document_id,))]
     for cid in cids:
         db.execute("DELETE FROM chunks_vec WHERE chunk_id=?", (cid,))
         db.execute("DELETE FROM chunks WHERE id=?", (cid,))
+    db.execute("DELETE FROM engineering_entities WHERE document_id=?", (document_id,))
     db.execute("DELETE FROM documents WHERE id=?", (document_id,))
     db.commit()
     return len(cids)

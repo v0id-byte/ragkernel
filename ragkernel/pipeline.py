@@ -44,18 +44,26 @@ def _mark_embedded(db) -> None:
 
 
 def _build_chunks(db, doc_id: int, pages, mod) -> list[dict]:
-    """按垂直层拆片 + 打分类 + 前置上下文前缀;table 类连接器(ATOMIC)整条一片。"""
+    """按垂直层拆片 + 打分类 + 前置上下文前缀;table 类连接器(ATOMIC)整条一片。
+
+    PRECHUNKED 连接器（如 CAD）：每 Page 即一片，直接用 page.title/page.meta，
+    **不走垂直层 split、不打故障案例默认分类、不加型号上下文前缀、不过 on_ingest**——
+    连接器已产出自足文本与实体溯源元数据，垂直层无关（不干扰 equipment 维修手册能力）。
+    """
     v = get_vertical()
     atomic = getattr(mod, "ATOMIC", False)
+    prechunked = getattr(mod, "PRECHUNKED", False)
     min_c, max_c = _chunk_params()
     doc_row = dict(db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone())
-    model = model_hint(doc_row.get("filename") or "")
+    model = "" if prechunked else model_hint(doc_row.get("filename") or "")
     chunk_dicts: list[dict] = []
     idx = 0
     for page in pages:
         if not page.text.strip():
             continue
-        if atomic:
+        if prechunked:
+            pieces = [(page.title, page.text, dict(page.meta or {}))]
+        elif atomic:
             # 工单/反馈是完整案例，整条一片、统一归为「故障案例」（不按字段细分类）
             pieces = [(f"记录 {page.page_no or idx + 1}", page.text, {"category": "故障案例", "by": "rule"})]
         else:
@@ -65,11 +73,14 @@ def _build_chunks(db, doc_id: int, pages, mod) -> list[dict]:
         for title, body, meta in pieces:
             if not body.strip():
                 continue
-            if model:
-                meta = {**meta, "model": model}
-            # 确定性上下文前缀（型号·章节·表标题）前置进正文——同时进 embedding 与 BM25
-            ctx = compose_context(model, meta)
-            text = (ctx + "\n" + body) if ctx else body
+            if prechunked:
+                text = body  # 连接器已产出自足文本，不再前置型号/章节上下文
+            else:
+                if model:
+                    meta = {**meta, "model": model}
+                # 确定性上下文前缀（型号·章节·表标题）前置进正文——同时进 embedding 与 BM25
+                ctx = compose_context(model, meta)
+                text = (ctx + "\n" + body) if ctx else body
             head = (title + "\n" + text) if title else text
             chunk_dicts.append({
                 "document_id": doc_id,
@@ -82,7 +93,7 @@ def _build_chunks(db, doc_id: int, pages, mod) -> list[dict]:
                 "content_hash": store.content_hash(doc_id, idx, text),
             })
             idx += 1
-    return v.on_ingest(doc_row, chunk_dicts)
+    return chunk_dicts if prechunked else v.on_ingest(doc_row, chunk_dicts)
 
 
 def ingest_file(path, db=None, do_embed: bool = True, on_stage=None) -> dict:
@@ -101,6 +112,10 @@ def ingest_file(path, db=None, do_embed: bool = True, on_stage=None) -> dict:
         if on_stage:
             on_stage("skip", {"document_id": existing["id"], "filename": path.name})
         return {"document_id": existing["id"], "skipped": True, "chunks": 0}
+
+    # 原生 CAD（暴露 load_bundle 的连接器）：单次解析 + 文档/chunks/工程实体原子写入。
+    if hasattr(mod, "load_bundle"):
+        return _ingest_cad_file(path, mod, db, sha, do_embed, on_stage, t0)
 
     if on_stage:
         on_stage("loading", {"filename": path.name})
@@ -131,6 +146,67 @@ def ingest_file(path, db=None, do_embed: bool = True, on_stage=None) -> dict:
     store.log_ingestion(db, doc_id, path.name, "ingested", chunks=len(chunk_dicts),
                         added=added, removed=removed, ms=int((time.time() - t0) * 1000))
     return {"document_id": doc_id, "skipped": False, "chunks": len(chunk_dicts)}
+
+
+def _ingest_cad_file(path, mod, db, sha: str, do_embed: bool, on_stage, t0: float) -> dict:
+    """CAD 摄取路径：load_bundle 一次解析 → 原子写入 → (事务外) embed。
+
+    超限 → status='rejected'（保留一个说明性 document 实体 + 一条状态 chunk，不假装成功）。
+    embed 失败 → status='embedding_failed'（结构化实体已落库、向量未完成，结构化工具仍可读）。
+    """
+    if on_stage:
+        on_stage("loading", {"filename": path.name})
+    bundle = mod.load_bundle(path)
+    pages = bundle.pages
+    smeta = bundle.source_metadata or {}
+    aborted = bool(smeta.get("aborted"))
+    paged = [p for p in pages if p.page_no]
+    doc_fields = dict(
+        filename=path.name, sha256=sha, source_path=str(path),
+        mime=getattr(mod, "MIME", ""), page_count=len(paged) or len(pages),
+        source_kind=getattr(mod, "SOURCE_KIND", "upload"),
+    )
+    if on_stage:
+        on_stage("chunking", {"filename": path.name})
+    res = store.ingest_cad_atomic(
+        db, doc_fields,
+        build_chunks=lambda doc_id: _build_chunks(db, doc_id, pages, mod),
+        entities=bundle.engineering_entities,
+        status="rejected" if aborted else "chunked",
+    )
+    doc_id = res["document_id"]
+    if on_stage:
+        on_stage("chunked", {"document_id": doc_id, "chunks": res["chunks"],
+                             "added": res["added"], "removed": res["removed"]})
+
+    if aborted:
+        reason = smeta.get("abort_reason")
+        store.log_ingestion(db, doc_id, path.name, "rejected", chunks=res["chunks"],
+                            ms=int((time.time() - t0) * 1000))
+        if on_stage:
+            on_stage("rejected", {"document_id": doc_id, "reason": reason})
+        return {"document_id": doc_id, "skipped": False, "chunks": res["chunks"],
+                "rejected": True, "reason": reason}
+
+    if do_embed:
+        if on_stage:
+            on_stage("embedding", {"document_id": doc_id})
+        try:
+            embed_missing(db)
+            _mark_embedded(db)
+        except Exception as e:  # 结构化层已提交；仅向量索引失败——如实标记，不谎报成功
+            store.set_status(db, doc_id, "embedding_failed")
+            store.log_ingestion(db, doc_id, path.name, "embedding_failed", chunks=res["chunks"],
+                                ms=int((time.time() - t0) * 1000))
+            if on_stage:
+                on_stage("embedding_failed", {"document_id": doc_id, "error": str(e)})
+            return {"document_id": doc_id, "skipped": False, "chunks": res["chunks"],
+                    "embedding_failed": True}
+        if on_stage:
+            on_stage("done", {"document_id": doc_id, "chunks": res["chunks"]})
+    store.log_ingestion(db, doc_id, path.name, "ingested", chunks=res["chunks"],
+                        added=res["added"], removed=res["removed"], ms=int((time.time() - t0) * 1000))
+    return {"document_id": doc_id, "skipped": False, "chunks": res["chunks"]}
 
 
 def ingest_record(title: str, text: str, meta: dict | None = None,

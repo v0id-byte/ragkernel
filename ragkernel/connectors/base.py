@@ -10,6 +10,10 @@ ELEMENT_TYPES = ("heading", "prose", "table", "procedure", "kv", "figure", "dime
 class Page:
     text: str
     page_no: int | None = None  # 分页格式（PDF）才有；DOCX/MD/TXT 为 None
+    # 以下两项供 PRECHUNKED 连接器（如 CAD）使用：本页即一片、连接器自己定边界与元数据。
+    # 默认空 → 既有连接器完全不受影响。
+    title: str | None = None    # 直接作为该 chunk 的标题（如 "【STEP · Part: OutputShaft】"）
+    meta: dict = field(default_factory=dict)  # 直接写入该片 meta_json（如 CAD 实体溯源键）
 
 
 @dataclass
@@ -39,3 +43,17 @@ class LoadedDoc:
     mime: str
     pages: list[Page]
     meta: dict = field(default_factory=dict)
+
+
+@dataclass
+class ConnectorResult:
+    """PRECHUNKED 连接器 `load_bundle()` 的返回：一次解析同时产出检索层与结构化工程层。
+
+    pages：喂现有 chunk/embed/检索管线（PRECHUNKED 时每 Page 即一片）。
+    engineering_entities：存 `engineering_entities` 表的 store-ready 行（*_json 已是字符串）。
+    source_metadata：文档级元数据（单位块 / warnings / aborted+abort_reason 等）。
+    """
+
+    pages: list[Page]
+    engineering_entities: list[dict] = field(default_factory=list)
+    source_metadata: dict = field(default_factory=dict)
