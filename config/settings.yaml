@@ -48,3 +48,11 @@ ratelimit:
   session_per_min: 20
   upload_per_min: 20
   max_question_chars: 2000
+
+auth:
+  token_ttl_days: 30
+  setup_code_ttl_days: 7   # 待激活账号的一次性建号口令有效期
+
+# 后台管理页面（/admin）IP 白名单；127.0.0.1/::1 本机回环地址始终放行，不用列在这里。
+admin:
+  allowed_ips: []

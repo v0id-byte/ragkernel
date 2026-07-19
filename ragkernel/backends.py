@@ -41,9 +41,12 @@ class AnthropicBackend:
     def __init__(self, prov: dict):
         import anthropic
 
-        key = os.environ.get(prov["api_key_env"], "")
+        key = prov.get("api_key") or os.environ.get(prov["api_key_env"], "")
         if not key:
-            raise RuntimeError(f"缺少 {prov['api_key_env']}，请在 .env 中配置")
+            raise RuntimeError(
+                f"缺少 API Key：请在后台管理页面（/admin）的「AI 服务提供方」里配置，"
+                f"或在 .env 设置 {prov['api_key_env']}"
+            )
         self.client = anthropic.Anthropic(api_key=key, base_url=prov.get("base_url") or None)
         self.model = prov["model"]
         self.max_tokens = int(prov.get("max_tokens", 8000))
@@ -78,7 +81,7 @@ class OpenAIBackend:
     def __init__(self, prov: dict):
         from openai import OpenAI
 
-        key = os.environ.get(prov["api_key_env"], "") or "EMPTY"  # 本地 vLLM 忽略 key，但 SDK 要非空
+        key = prov.get("api_key") or os.environ.get(prov["api_key_env"], "") or "EMPTY"  # 本地 vLLM 忽略 key，但 SDK 要非空
         self.client = OpenAI(api_key=key, base_url=prov.get("base_url") or None)
         self.model = prov["model"]
         self.max_tokens = int(prov.get("max_tokens", 8000))

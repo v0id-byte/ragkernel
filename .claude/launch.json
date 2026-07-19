@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ragkernel",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "ragkernel", "serve"],
+      "port": 8360
+    }
+  ]
+}

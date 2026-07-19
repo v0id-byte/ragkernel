@@ -18,17 +18,29 @@ def connect() -> sqlite3.Connection:
     db = sqlite3.connect(config.data_dir() / "audit.db", check_same_thread=False)
     db.row_factory = sqlite3.Row
     db.executescript(SCHEMA)
+    try:
+        db.execute("ALTER TABLE sessions ADD COLUMN user_id INTEGER")
+        db.commit()
+    except sqlite3.OperationalError:
+        pass  # 列已存在
     return db
 
 
 class Audit:
     """一个会话一条 session 记录；实例本身可作 audit(kind, payload) 回调。"""
 
-    def __init__(self, client: str = "cli", ip: str = "", fingerprint: str = "", user_agent: str = ""):
+    def __init__(
+        self,
+        client: str = "cli",
+        ip: str = "",
+        fingerprint: str = "",
+        user_agent: str = "",
+        user_id: int | None = None,
+    ):
         self.db = connect()
         cur = self.db.execute(
-            "INSERT INTO sessions(started_at, client, ip, fingerprint, user_agent) VALUES(?,?,?,?,?)",
-            (int(time.time()), client, ip or None, fingerprint or None, user_agent or None),
+            "INSERT INTO sessions(started_at, client, ip, fingerprint, user_agent, user_id) VALUES(?,?,?,?,?,?)",
+            (int(time.time()), client, ip or None, fingerprint or None, user_agent or None, user_id),
         )
         self.session_id = cur.lastrowid
         self.db.commit()

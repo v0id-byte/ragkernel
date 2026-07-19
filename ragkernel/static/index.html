@@ -191,7 +191,42 @@
   .hist .h b { color: var(--fg); font-weight: 500; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .hist .h .tnum { font-variant-numeric: tabular-nums; }
 
-  @media (max-width: 720px) { #docs { display: none; } }
+  /* 登录界面（未登录时的全屏遮罩） */
+  #login { position: fixed; inset: 0; z-index: 80; display: none; align-items: center; justify-content: center; background: var(--bg); }
+  #login.show { display: flex; }
+  #login .box { width: min(360px, 88vw); background: var(--surface); border: 0.5px solid var(--line); border-radius: var(--radius-lg); padding: 28px 26px; box-shadow: 0 30px 80px rgba(0,0,0,.18); }
+  #login h1 { font-size: 19px; font-weight: 600; letter-spacing: -0.02em; margin-bottom: 4px; }
+  #login .sub { color: var(--fg-3); font-size: 13px; margin-bottom: 18px; }
+  #login input { width: 100%; background: var(--surface-2); border: 0.5px solid var(--line); border-radius: 10px; padding: 10px 12px; color: var(--fg); font: inherit; font-size: 14px; margin-bottom: 10px; outline: none; transition: border-color 140ms ease; }
+  #login input:focus { border-color: var(--focus); }
+  #login button { width: 100%; height: 42px; background: var(--btn); color: var(--btn-fg); border: none; border-radius: 10px; font: inherit; font-size: 14.5px; font-weight: 590; cursor: pointer; margin-top: 4px; }
+  #login button:active { transform: scale(.98); }
+  #loginerr { color: var(--danger); font-size: 13px; margin-top: 10px; min-height: 1em; }
+  #login .whoami { color: var(--fg-2); font-size: 13px; margin-bottom: 14px; }
+  #login .whoami a { color: var(--focus); text-decoration: none; margin-left: 8px; cursor: pointer; }
+
+  #docsbtn { display: none; }
+
+  @media (max-width: 720px) {
+    #docsbtn { display: inline-flex; }
+    header { padding: 10px 12px; gap: 8px; }
+    header .sub { display: none; }
+    header .brand { font-size: 15px; }
+    header .ghost { padding: 0 10px; height: 30px; font-size: 12.5px; white-space: nowrap; }
+    #docs {
+      position: fixed; inset: 0 auto 0 0; z-index: 56; width: min(300px, 84vw);
+      transform: translateX(-100%); transition: transform 280ms cubic-bezier(.2,.8,.2,1);
+      box-shadow: 0 0 40px rgba(0,0,0,.3);
+    }
+    #docs.show { transform: translateX(0); }
+    #docs-scrim { position: fixed; inset: 0; z-index: 54; background: color-mix(in srgb, #000 32%, transparent); opacity: 0; pointer-events: none; transition: opacity 280ms ease; }
+    #docs-scrim.show { opacity: 1; pointer-events: auto; }
+    #log { padding: 20px 14px 8px; }
+    #bar { padding: 10px 14px 14px; }
+  }
+  @media (min-width: 721px) and (max-width: 1024px) {
+    #docs { width: 240px; }
+  }
   @media (prefers-reduced-motion: reduce) {
     * { transition-duration: 1ms !important; scroll-behavior: auto !important; }
     #dashbox { transform: translateX(-50%) scale(1) !important; }
@@ -202,12 +237,38 @@
 </style>
 </head>
 <body>
+<div id="login">
+  <div class="box">
+    <h1>ragkernel</h1>
+    <div class="sub">企业知识库 · 登录后可提问</div>
+    <form id="loginstep-user">
+      <input id="loginuser" autocomplete="username" placeholder="用户名" required>
+      <button type="submit">继续</button>
+    </form>
+    <form id="loginstep-pass" hidden>
+      <div class="whoami">账号：<b id="whoami-pass"></b><a href="#" id="backfrompass">换一个</a></div>
+      <input id="loginpass" type="password" autocomplete="current-password" placeholder="密码" required>
+      <button type="submit">登录</button>
+    </form>
+    <form id="loginstep-setup" hidden>
+      <div class="whoami">账号：<b id="whoami-setup"></b><a href="#" id="backfromsetup">换一个</a></div>
+      <div class="sub">首次登录，请输入管理员给你的建号口令并设置密码</div>
+      <input id="setupcode" autocomplete="off" placeholder="建号口令" required>
+      <input id="setuppass" type="password" autocomplete="new-password" placeholder="设置密码（至少 6 位）" required>
+      <button type="submit">设置密码并登录</button>
+    </form>
+    <div id="loginerr"></div>
+  </div>
+</div>
 <header>
+  <button class="ghost tap" id="docsbtn" title="文档"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
   <span class="brand">ragkernel</span><span class="sub">企业知识库 · 本地检索 · 带引用问答</span>
   <span class="spacer"></span>
   <button class="ghost" id="dashbtn"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19h16"/><path d="M7 19v-5"/><path d="M12 19v-9"/><path d="M17 19v-7"/></svg>仪表盘</button>
+  <button class="ghost" id="logoutbtn">退出</button>
 </header>
 <div id="main">
+  <div id="docs-scrim"></div>
   <aside id="docs">
     <div class="hd"><span>文档</span><span class="sub" id="doccount"></span></div>
     <div id="drop">拖拽文件到此，或点击选择<br><span class="sub">PDF · Word · PPT · Markdown · CSV/Excel 工单，自动索引</span></div>
@@ -254,6 +315,100 @@ const ICON = {
 
 function scrollDown() { log.scrollTop = log.scrollHeight; }
 
+// ── 登录 / token（用户名 → 确认 → 按账号状态弹密码框或设密码框）───
+let TOKEN = localStorage.getItem('rk_token') || '';
+function setToken(t) { TOKEN = t; if (t) localStorage.setItem('rk_token', t); else localStorage.removeItem('rk_token'); }
+
+const loginStepUser = $('#loginstep-user'), loginStepPass = $('#loginstep-pass'), loginStepSetup = $('#loginstep-setup');
+function showLoginStep(step) {
+  loginStepUser.hidden = step !== 'user';
+  loginStepPass.hidden = step !== 'pass';
+  loginStepSetup.hidden = step !== 'setup';
+  $('#loginerr').textContent = '';
+}
+function showLogin(msg) {
+  $('#login').classList.add('show');
+  showLoginStep('user');
+  $('#loginuser').value = '';
+  if (msg) $('#loginerr').textContent = msg;
+}
+function hideLogin() { $('#login').classList.remove('show'); $('#loginerr').textContent = ''; }
+
+async function apiFetch(path, opts = {}) {
+  const headers = Object.assign({}, opts.headers, TOKEN ? { Authorization: 'Bearer ' + TOKEN } : {});
+  const r = await fetch(path, Object.assign({}, opts, { headers }));
+  if (r.status === 401) { setToken(''); showLogin('登录已过期，请重新登录'); }
+  return r;
+}
+
+loginStepUser.addEventListener('submit', async e => {
+  e.preventDefault();
+  const username = $('#loginuser').value.trim();
+  if (!username) return;
+  $('#loginerr').textContent = '';
+  try {
+    const r = await fetch('/api/auth/check-user', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username }) });
+    const j = await r.json();
+    if (!r.ok) { $('#loginerr').textContent = j.error || '请求失败'; return; }
+    if (!j.exists) { $('#loginerr').textContent = '账号不存在，请联系管理员建号'; return; }
+    if (j.needs_setup) {
+      $('#whoami-setup').textContent = username;
+      $('#setupcode').value = ''; $('#setuppass').value = '';
+      showLoginStep('setup');
+      $('#setupcode').focus();
+    } else {
+      $('#whoami-pass').textContent = username;
+      $('#loginpass').value = '';
+      showLoginStep('pass');
+      $('#loginpass').focus();
+    }
+  } catch (e) { $('#loginerr').textContent = '' + e; }
+});
+
+loginStepPass.addEventListener('submit', async e => {
+  e.preventDefault();
+  const username = $('#whoami-pass').textContent, password = $('#loginpass').value;
+  $('#loginerr').textContent = '登录中…';
+  try {
+    const r = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) });
+    const j = await r.json();
+    if (!r.ok) { $('#loginerr').textContent = j.error || '登录失败'; return; }
+    setToken(j.token);
+    await boot();
+  } catch (e) { $('#loginerr').textContent = '' + e; }
+});
+
+loginStepSetup.addEventListener('submit', async e => {
+  e.preventDefault();
+  const username = $('#whoami-setup').textContent, setup_code = $('#setupcode').value.trim(), password = $('#setuppass').value;
+  if (password.length < 6) { $('#loginerr').textContent = '密码至少 6 位'; return; }
+  $('#loginerr').textContent = '设置中…';
+  try {
+    const r = await fetch('/api/auth/setup-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, setup_code, password }) });
+    const j = await r.json();
+    if (!r.ok) { $('#loginerr').textContent = j.error || '设置失败'; return; }
+    setToken(j.token);
+    await boot();
+  } catch (e) { $('#loginerr').textContent = '' + e; }
+});
+
+$('#backfrompass').onclick = e => { e.preventDefault(); showLoginStep('user'); };
+$('#backfromsetup').onclick = e => { e.preventDefault(); showLoginStep('user'); };
+
+$('#logoutbtn').onclick = async () => {
+  try { await apiFetch('/api/auth/logout', { method: 'POST' }); } catch (e) {}
+  setToken('');
+  log.innerHTML = '';
+  showLogin();
+};
+
+// ── 文档抽屉（窄屏） ──────────────────────────────────────────
+const docsPanel = $('#docs'), docsScrim = $('#docs-scrim');
+function openDocs() { docsPanel.classList.add('show'); docsScrim.classList.add('show'); }
+function closeDocs() { docsPanel.classList.remove('show'); docsScrim.classList.remove('show'); }
+$('#docsbtn').onclick = openDocs;
+docsScrim.onclick = closeDocs;
+
 async function readSSE(resp, onEvent) {
   const reader = resp.body.getReader(), dec = new TextDecoder();
   let buf = '';
@@ -276,8 +431,11 @@ function fp() {
 }
 
 async function boot() {
-  const r = await fetch('/api/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fingerprint: fp() }) });
+  if (!TOKEN) { showLogin(); return; }
+  const r = await apiFetch('/api/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fingerprint: fp() }) });
+  if (!r.ok) { showLogin('会话建立失败，请重新登录'); return; }
   session = await r.json();
+  hideLogin();
   await loadDocs();
   const hint = document.createElement('div');
   hint.className = 'hint';
@@ -286,7 +444,7 @@ async function boot() {
 }
 
 async function loadDocs() {
-  const r = await fetch('/api/documents');
+  const r = await apiFetch('/api/documents');
   const j = await r.json();
   const list = $('#doclist'); list.innerHTML = '';
   $('#doccount').textContent = j.documents.length ? j.documents.length + ' 篇' : '';
@@ -303,7 +461,7 @@ async function loadDocs() {
   }
 }
 
-async function deleteDoc(id) { await fetch('/api/documents/' + id, { method: 'DELETE' }); loadDocs(); }
+async function deleteDoc(id) { await apiFetch('/api/documents/' + id, { method: 'DELETE' }); loadDocs(); }
 
 function highlightDoc(id) {
   document.querySelectorAll('.doc').forEach(e => e.classList.toggle('hl', e.dataset.id == id));
@@ -316,7 +474,7 @@ async function uploadFile(file) {
   const fd = new FormData(); fd.append('file', file);
   prog.textContent = '上传中 ' + file.name + ' …';
   try {
-    const r = await fetch('/api/upload', { method: 'POST', body: fd });
+    const r = await apiFetch('/api/upload', { method: 'POST', body: fd });
     if (!r.ok) { const j = await r.json().catch(() => ({})); prog.textContent = '未成功 · ' + (j.error || r.status); return; }
     await readSSE(r, ev => {
       if (ev.t === 'stage') {
@@ -353,7 +511,7 @@ function addFeedback(turn, question) {
       const msg = fb.querySelector('.msg');
       if (!resolution) { msg.className = 'msg err'; msg.textContent = '请填写实际处理'; return; }
       msg.className = 'msg'; msg.textContent = '入库中…';
-      const r = await fetch('/api/feedback', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      const r = await apiFetch('/api/feedback', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question: fb.querySelector('.qq').value, resolution, equipment: fb.querySelector('.eq').value, result: fb.querySelector('.rs').value }) });
       const j = await r.json();
       if (r.ok) { fb.innerHTML = `<span class="done">已入库为 D${j.document_id}「${esc(j.category)}」，下次同类问题会用上。</span>`; loadDocs(); }
@@ -369,7 +527,7 @@ async function ask(q, image) {
   log.appendChild(turn); scrollDown();
   const thinking = turn.querySelector('.thinking');
   try {
-    const r = await fetch('/api/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session_id: session.session_id, question: q, image: image || undefined }) });
+    const r = await apiFetch('/api/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session_id: session.session_id, question: q, image: image || undefined }) });
     if (!r.ok) { const j = await r.json().catch(() => ({})); thinking.className = 'thinking err'; thinking.textContent = j.error || r.status; return; }
     await readSSE(r, ev => {
       if (ev.t === 'tool') {
@@ -457,14 +615,14 @@ function renderDash(j) {
       `<div class="h"><b>${esc(h.filename)}</b><span>${h.action}</span><span class="tnum">${h.chunks || 0} 片</span><span class="tnum">${h.ms || 0} ms</span><span class="tnum">${new Date(h.ts * 1000).toLocaleString()}</span></div>`).join('') || '<span style="color:var(--fg-3)">暂无</span>'}</div></div>`;
 }
 async function openDash() {
-  const r = await fetch('/api/stats'); const j = await r.json();
+  const r = await apiFetch('/api/stats'); const j = await r.json();
   renderDash(j); $('#dash').classList.add('show');
 }
 function closeDash() { $('#dash').classList.remove('show'); }
 $('#dashbtn').onclick = openDash;
 $('#dashclose').onclick = closeDash;
 $('#scrim').onclick = closeDash;
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDash(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeDash(); closeDocs(); } });
 
 boot();
 </script>
