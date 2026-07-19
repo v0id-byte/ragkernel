@@ -20,7 +20,9 @@ CREATE TABLE IF NOT EXISTS users(
 );
 CREATE TABLE IF NOT EXISTS tokens(
   token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL,
-  created_at INTEGER, expires_at INTEGER, last_seen_at INTEGER
+  created_at INTEGER, expires_at INTEGER, last_seen_at INTEGER,
+  label TEXT, token_kind TEXT NOT NULL DEFAULT 'session',
+  UNIQUE(user_id, token_kind, label)
 );
 """
 
@@ -51,11 +53,29 @@ def _migrate(db: sqlite3.Connection):
             DROP TABLE users_old;
         """)
         db.commit()
+    # agent token（MCP 用）：给旧库的 tokens 补 label + token_kind 列并加 UNIQUE(user_id,token_kind,label)。
+    # 旧登录 token 一律成 token_kind='session'（label 空）——天然被 MCP 的 resolve_agent_token 拒之门外。
+    tcols = {r["name"] for r in db.execute("PRAGMA table_info(tokens)")}
+    if "token_kind" not in tcols:
+        db.executescript("""
+            ALTER TABLE tokens RENAME TO tokens_old;
+            CREATE TABLE tokens(
+              token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL,
+              created_at INTEGER, expires_at INTEGER, last_seen_at INTEGER,
+              label TEXT, token_kind TEXT NOT NULL DEFAULT 'session',
+              UNIQUE(user_id, token_kind, label)
+            );
+            INSERT INTO tokens(token_hash, user_id, created_at, expires_at, last_seen_at)
+              SELECT token_hash, user_id, created_at, expires_at, last_seen_at FROM tokens_old;
+            DROP TABLE tokens_old;
+        """)
+        db.commit()
 
 
 def connect() -> sqlite3.Connection:
     db = sqlite3.connect(config.data_dir() / "auth.db", check_same_thread=False)
     db.row_factory = sqlite3.Row
+    db.execute("PRAGMA busy_timeout=5000")  # MCP HTTP 每请求刷 last_seen，并发写让其等待重试而非直接报 locked
     db.executescript(SCHEMA)
     _migrate(db)
     return db
@@ -155,13 +175,24 @@ def setup_password(username: str, setup_code: str, password: str) -> dict | None
     return dict(row)
 
 
-def issue_token(user_id: int) -> str:
+def user_id_by_username(username: str) -> int | None:
+    db = connect()
+    row = db.execute("SELECT id FROM users WHERE username=? AND is_active=1", (username,)).fetchone()
+    return row["id"] if row else None
+
+
+def issue_token(user_id: int, ttl_days: int | None = None, *, label: str | None = None,
+                token_kind: str = "session") -> str:
+    """签发不透明 token（只回原始值这一次，库里只存 sha256）。
+    web 登录用默认（session / 30 天 / 无 label）；MCP agent token 传 token_kind='agent' + label + 长 ttl。"""
     token = secrets.token_hex(32)
     now = int(time.time())
+    days = ttl_days if ttl_days is not None else _token_ttl_days()
     db = connect()
     db.execute(
-        "INSERT INTO tokens(token_hash, user_id, created_at, expires_at, last_seen_at) VALUES(?,?,?,?,?)",
-        (_hash_token(token), user_id, now, now + _token_ttl_days() * 86400, now),
+        "INSERT INTO tokens(token_hash, user_id, created_at, expires_at, last_seen_at, label, token_kind) "
+        "VALUES(?,?,?,?,?,?,?)",
+        (_hash_token(token), user_id, now, now + days * 86400, now, label, token_kind),
     )
     db.commit()
     return token
@@ -187,6 +218,74 @@ def resolve_token(token: str) -> dict | None:
     db.execute("UPDATE tokens SET last_seen_at=? WHERE token_hash=?", (now, _hash_token(token)))
     db.commit()
     return dict(row)
+
+
+# ── Agent token（MCP 专用，只读网关鉴权）────────────────────────────
+
+def resolve_agent_token(token: str) -> dict | None:
+    """有效且 token_kind='agent' 的 token → 用户 + token 元数据（token_label/token_kind/token_hash）；
+    顺手刷新 last_seen。**只认 agent kind**——web 登录 token（session）一律返回 None，进不了 MCP。"""
+    db = connect()
+    now = int(time.time())
+    th = _hash_token(token)
+    row = db.execute(
+        "SELECT u.*, t.label AS token_label, t.token_kind AS token_kind, t.token_hash AS token_hash "
+        "FROM tokens t JOIN users u ON u.id = t.user_id "
+        "WHERE t.token_hash=? AND t.token_kind='agent' AND t.expires_at > ? AND u.is_active=1",
+        (th, now),
+    ).fetchone()
+    if not row:
+        return None
+    db.execute("UPDATE tokens SET last_seen_at=? WHERE token_hash=?", (now, th))
+    db.commit()
+    return dict(row)
+
+
+def list_tokens(username: str | None = None) -> list[dict]:
+    """列出 agent token（不含原始 token；id_short=hash 前 8 位，供撤销引用）。"""
+    db = connect()
+    sql = ("SELECT t.token_hash, t.label, t.token_kind, t.created_at, t.expires_at, t.last_seen_at, "
+           "u.username FROM tokens t JOIN users u ON u.id=t.user_id WHERE t.token_kind='agent'")
+    params: tuple = ()
+    if username:
+        sql += " AND u.username=?"
+        params = (username,)
+    sql += " ORDER BY t.created_at DESC"
+    out = []
+    for r in db.execute(sql, params).fetchall():
+        d = dict(r)
+        d["id_short"] = d.pop("token_hash")[:8]
+        out.append(d)
+    return out
+
+
+def revoke_agent_token(user_id: int | None = None, label: str | None = None,
+                       hash_prefix: str | None = None) -> dict:
+    """撤销一个 agent token：要么 (user_id + label) 精确，要么 hash 前缀(≥8 位)。
+    必须**恰好命中一个**——命中 0 或多个都拒绝（返回 error），避免误撤。"""
+    db = connect()
+    if hash_prefix:
+        if len(hash_prefix) < 8:
+            return {"deleted": 0, "error": "hash 前缀至少 8 位"}
+        rows = db.execute(
+            "SELECT token_hash FROM tokens WHERE token_kind='agent' AND token_hash LIKE ?",
+            (hash_prefix + "%",),
+        ).fetchall()
+    elif user_id is not None and label:
+        rows = db.execute(
+            "SELECT token_hash FROM tokens WHERE token_kind='agent' AND user_id=? AND label=?",
+            (user_id, label),
+        ).fetchall()
+    else:
+        return {"deleted": 0, "error": "需要 (--user + label) 或 hash 前缀"}
+    if not rows:
+        return {"deleted": 0, "error": "未命中任何 agent token"}
+    if len(rows) > 1:
+        return {"deleted": 0, "error": f"命中 {len(rows)} 个，用更长前缀或加 --user 精确",
+                "matches": [r["token_hash"][:8] for r in rows]}
+    db.execute("DELETE FROM tokens WHERE token_hash=?", (rows[0]["token_hash"],))
+    db.commit()
+    return {"deleted": 1, "id_short": rows[0]["token_hash"][:8]}
 
 
 # ── Flask 装饰器 ─────────────────────────────────────────────────
