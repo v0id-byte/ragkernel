@@ -157,6 +157,7 @@ class Toolbox:
                 "filename": self._filename(r["document_id"]),
                 "page": r["page_no"],
                 "category": self._category(r),
+                "snippet": (r["text"] or "")[:200],   # 前端引用悬浮预览用
             })
 
     # ── 工具实现 ──────────────────────────────────────────────
