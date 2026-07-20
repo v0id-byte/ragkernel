@@ -9,12 +9,17 @@ from pathlib import Path
 
 from flask import Flask, Response, g, jsonify, redirect, request, send_file
 
-from . import agent, audit, auth, backends, config, pipeline, store
+from . import agent, audit, auth, backends, config, convos, pipeline, store
 from .tools import Toolbox
 
 app = Flask(__name__)
+# 活跃会话的内存缓存（Toolbox / Audit / 忙锁）。对话本身持久化在 convos.db，
+# 这里丢了不等于对话丢了 —— resolve_session() 会从 messages 重建。
 _sessions: dict[str, dict] = {}
 _lock = threading.Lock()
+# 每个 sid 一把冷启动水合锁：_lock 只护 dict 存取（不做 IO），水合本身可能读库、
+# 建连接、写审计，不能压在全局锁里。
+_hydrating: dict[str, threading.Lock] = {}
 STATIC = Path(__file__).parent / "static"
 
 
@@ -155,24 +160,60 @@ def new_session():
         return jsonify({"error": "建立会话过于频繁，稍后再试"}), 429
     fp = ((request.json or {}).get("fingerprint") or "")[:64]
     ua = (request.headers.get("User-Agent", "") or "")[:200]
-    aud = audit.Audit(client="web", ip=ip, fingerprint=fp, user_agent=ua, user_id=g.user["id"])
     sid = secrets.token_hex(16)
-    with _lock:
-        _sessions[sid] = {
-            "toolbox": Toolbox(audit=aud),
-            "audit": aud,
-            "history": [],
-            "busy": threading.Lock(),
-            "fingerprint": fp,
-            "ip": ip,
-            "user_id": g.user["id"],
-        }
+    _hydrate(sid, g.user["id"], [], ip=ip, fingerprint=fp, user_agent=ua)
     return jsonify({"session_id": sid})
 
 
-def _get_session(sid: str) -> dict | None:
+def _hydrate(sid: str, user_id: int, history: list, ip: str = "",
+             fingerprint: str = "", user_agent: str = "") -> dict:
+    """建一个内存会话（新开或从库里恢复）。history 为空即全新会话。"""
+    aud = audit.Audit(client="web", ip=ip, fingerprint=fingerprint, user_agent=user_agent, user_id=user_id)
+    s = {
+        "toolbox": Toolbox(audit=aud),
+        "audit": aud,
+        "history": history,
+        "busy": threading.Lock(),
+        "fingerprint": fingerprint,
+        "ip": ip,
+        "user_id": user_id,
+    }
     with _lock:
-        return _sessions.get(sid)
+        _sessions[sid] = s
+    return s
+
+
+def resolve_session(sid: str) -> dict | None:
+    """活跃会话的唯一入口：先查内存缓存，miss 就从 convos.db 重建。
+
+    缓存命中也要重新核对归属 —— key 只有 sid、不含用户维度，跳过这步就等于拿缓存当鉴权旁路。
+    """
+    if not sid:
+        return None
+    uid = g.user["id"]
+    with _lock:
+        s = _sessions.get(sid)
+    if s:
+        return s if s["user_id"] == uid else None
+
+    # 冷启动：同一 sid 只许一个线程水合。否则两个请求（比如重启后两个标签页同时提问）
+    # 会各建一套 Toolbox/Audit 和各自的 busy 锁，两个 /api/ask 就能并发改同一段历史。
+    # 必须在构造前收口 —— Audit 一构造就写一条 sessions 记录，事后丢弃会留下幽灵记录。
+    with _lock:
+        lk = _hydrating.setdefault(sid, threading.Lock())
+    try:
+        with lk:
+            with _lock:
+                s = _sessions.get(sid)
+            if s:
+                return s if s["user_id"] == uid else None
+            conv = convos.get_conv(sid, uid)  # 已按 user_id 收口，别人的会话在这里就是不存在
+            if not conv:
+                return None
+            return _hydrate(sid, uid, convos.build_history(conv["turns"]), ip=_client_ip())
+    finally:
+        with _lock:
+            _hydrating.pop(sid, None)
 
 
 def _sse(gen):
@@ -291,7 +332,8 @@ def feedback():
 @auth.require_auth
 def ask():
     body = request.json or {}
-    s = _get_session(body.get("session_id", ""))
+    sid = body.get("session_id", "")
+    s = resolve_session(sid)
     question = (body.get("question") or "").strip()
     image = body.get("image")
     images = None
@@ -315,7 +357,10 @@ def ask():
 
     q: queue.Queue = queue.Queue()
 
+    uid = g.user["id"]
+
     def work():
+        t0 = time.time()
         try:
             answer, messages, tb, model = agent.ask(
                 question, toolbox=s["toolbox"], history=s["history"], images=images,
@@ -328,6 +373,11 @@ def ask():
                 if c["ref"] not in seen:
                     seen.add(c["ref"])
                     cites.append(c)
+            try:
+                convos.append_turn(sid, uid, question, answer, citations=cites, model=model,
+                                   has_image=bool(images), latency_ms=int((time.time() - t0) * 1000))
+            except Exception:
+                pass  # 存历史失败不该把已经答出来的回答一起带走
             q.put({"t": "answer", "text": answer})
             q.put({"t": "done", "citations": cites, "model": model})
             tb.touched.clear()
@@ -347,6 +397,51 @@ def ask():
             yield f"data: {json.dumps(item, ensure_ascii=False, default=str)}\n\n"
 
     return _sse(stream())
+
+
+# ── 历史会话 ──────────────────────────────────────────────────
+
+@app.get("/api/conversations")
+@auth.require_auth
+def conversations():
+    q = (request.args.get("q") or "").strip()[:100]
+    limit = min(max(int(request.args.get("limit", 100) or 100), 1), 200)
+    return jsonify({"conversations": convos.list_convs(g.user["id"], q=q, limit=limit)})
+
+
+@app.get("/api/conversations/<cid>")
+@auth.require_auth
+def conversation(cid: str):
+    conv = convos.get_conv(cid, g.user["id"])
+    if not conv:
+        return jsonify({"error": "会话不存在"}), 404
+    # 水合失败不该挡住回放：看历史 ≠ 继续聊，provider 临时抽风时正文仍要看得到。
+    try:
+        resumable = resolve_session(cid) is not None
+    except Exception:
+        resumable = False
+    return jsonify({**conv, "resumable": resumable})
+
+
+@app.patch("/api/conversations/<cid>")
+@auth.require_auth
+def rename_conversation(cid: str):
+    title = ((request.json or {}).get("title") or "").strip()
+    if not title:
+        return jsonify({"error": "标题为空"}), 400
+    if not convos.rename(cid, g.user["id"], title):
+        return jsonify({"error": "会话不存在"}), 404
+    return jsonify({"ok": True, "title": title[:80]})
+
+
+@app.delete("/api/conversations/<cid>")
+@auth.require_auth
+def delete_conversation(cid: str):
+    if not convos.delete_conv(cid, g.user["id"]):  # 先删库，成功了才清缓存
+        return jsonify({"error": "会话不存在"}), 404
+    with _lock:
+        _sessions.pop(cid, None)
+    return jsonify({"ok": True, "deleted": cid})
 
 
 # ── 后台管理（IP 白名单 + 管理员账号）────────────────────────────
