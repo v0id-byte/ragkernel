@@ -61,7 +61,9 @@ window.RK_I18N = (function () {
       'chat.send': '提问',
       'chat.thinking': '思考中…',
       'chat.photoQuestionFallback': '照片提问',
-      'chat.hintHtml': '上传手册或工单后即可提问。答案只依据文档内容，并附 <code>[D&lt;文档&gt;#&lt;块&gt; p.&lt;页&gt; · 分类]</code> 引用；查不到会如实说明。答完可记录处理结果，回填知识库。',
+      'chat.hintHtml': '上传手册或工单后即可提问。答案只依据文档内容，并附 <code>[D&lt;文档&gt;#&lt;块&gt; p.&lt;页&gt;]</code> 引用；查不到会如实说明。答完可记录处理结果，回填知识库。',
+      'cites.more': '+{{n}} 处引用',
+      'cites.collapse': '收起',
 
       'feedback.recordButton': '记录处理结果',
       'feedback.equipmentPlaceholder': '设备 / 型号（选填）',
@@ -191,7 +193,9 @@ window.RK_I18N = (function () {
       'chat.send': 'Ask',
       'chat.thinking': 'Thinking…',
       'chat.photoQuestionFallback': 'Photo question',
-      'chat.hintHtml': 'Upload manuals or tickets, then ask. Answers are grounded only in document content, with <code>[D&lt;doc&gt;#&lt;chunk&gt; p.&lt;page&gt; · category]</code> citations; if nothing is found, it will say so honestly. After answering, you can record the resolution to feed back into the knowledge base.',
+      'chat.hintHtml': 'Upload manuals or tickets, then ask. Answers are grounded only in document content, with <code>[D&lt;doc&gt;#&lt;chunk&gt; p.&lt;page&gt;]</code> citations; if nothing is found, it will say so honestly. After answering, you can record the resolution to feed back into the knowledge base.',
+      'cites.more': '+{{n}} more',
+      'cites.collapse': 'Collapse',
 
       'feedback.recordButton': 'Record resolution',
       'feedback.equipmentPlaceholder': 'Equipment / model (optional)',

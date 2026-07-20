@@ -86,7 +86,7 @@
   #log { flex: 1; overflow-y: auto; padding: 28px 28px 8px; scroll-behavior: smooth; }
   .turn { max-width: 780px; margin: 0 auto 30px; }
   .q { font-size: 16px; font-weight: 600; letter-spacing: -0.015em; margin-bottom: 10px; }
-  .a { white-space: pre-wrap; word-break: break-word; letter-spacing: -0.003em; color: var(--fg); }
+  .a { word-break: break-word; letter-spacing: -0.003em; color: var(--fg); }
   .trace { color: var(--fg-3); font-size: 12.5px; margin: 3px 0; display: flex; align-items: center; gap: 6px; }
   .trace svg { width: 13px; height: 13px; opacity: .7; }
   .trace code { font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 12px; }
@@ -236,7 +236,68 @@
   @media (prefers-reduced-transparency: reduce) {
     header, #bar, #dashbox { backdrop-filter: none; -webkit-backdrop-filter: none; background: var(--surface); }
   }
+
+  /* 回答正文的 Markdown 渲染 —— 仅支持受控子集，与 agent.py 的 Response Format Contract 对应 */
+  .md > :first-child { margin-top: 0; }
+  .md > :last-child { margin-bottom: 0; }
+  .md h1, .md h2, .md h3 {
+    font-weight: 600; letter-spacing: -0.015em; line-height: 1.3;
+    margin: 22px 0 10px; color: var(--fg);
+  }
+  .md h1 { font-size: 19px; }
+  .md h2 { font-size: 17px; }
+  .md h3 { font-size: 15px; color: var(--fg-2); }
+  .md p { margin: 0 0 10px; }
+  .md ul, .md ol { margin: 0 0 10px; padding-left: 1.3em; }
+  .md li { margin-bottom: 4px; }
+  .md li > ul, .md li > ol { margin: 4px 0 0; }
+  .md strong { font-weight: 600; }
+  .md hr { border: 0; border-top: 0.5px solid var(--line); margin: 18px 0; }
+  .md blockquote {
+    margin: 0 0 10px; padding: 2px 0 2px 12px;
+    border-left: 2px solid var(--line); color: var(--fg-2);
+  }
+  .md code {
+    font: 12.5px "SF Mono", ui-monospace, Menlo, monospace;
+    background: var(--fill); padding: 1.5px 5px; border-radius: 5px;
+  }
+  .md pre {
+    margin: 0 0 10px; padding: 12px 14px; overflow-x: auto;
+    background: var(--fill); border-radius: 10px;
+  }
+  .md pre code { background: none; padding: 0; font-size: 12.5px; line-height: 1.55; }
+  /* 表格外层由 JS 包一层 .tablewrap，宽表自己横向滚动、不撑破 780px 的 .turn */
+  .md .tablewrap { overflow-x: auto; margin: 0 0 12px; }
+  .md table { border-collapse: collapse; font-size: 13.5px; }
+  .md th, .md td {
+    border: 0.5px solid var(--line); padding: 6px 10px;
+    text-align: left; vertical-align: top; white-space: nowrap;
+  }
+  .md th { background: var(--fill); font-weight: 600; }
+
+  /* 正文行内引用 */
+  .icite {
+    color: var(--fg-2); cursor: pointer; white-space: nowrap;
+    text-decoration: underline dotted; text-underline-offset: 2px;
+    transition: color 140ms ease;
+  }
+  .icite:hover { color: var(--fg); }
+  .cite.more { color: var(--fg-3); }
+
+  /* 引用悬浮预览卡片 */
+  #citepop {
+    position: fixed; z-index: 60; width: 340px; max-width: calc(100vw - 24px); padding: 10px 12px;
+    background: var(--surface); border: 0.5px solid var(--line); border-radius: 10px;
+    box-shadow: 0 8px 28px rgba(0,0,0,.14);
+    opacity: 0; visibility: hidden; transition: opacity 120ms ease, visibility 0s linear 120ms;
+  }
+  /* 可以把鼠标移进卡片（选中/阅读长片段），所以隐藏时才屏蔽命中 */
+  #citepop.on { opacity: 1; visibility: visible; transition-delay: 0s; }
+  #citepop .h { font-size: 11.5px; color: var(--fg-3); margin-bottom: 5px; }
+  #citepop .s { font-size: 12.5px; line-height: 1.5; color: var(--fg-2); white-space: pre-wrap; }
 </style>
+<script src="/static/vendor/marked.min.js"></script>
+<script src="/static/vendor/purify.min.js"></script>
 </head>
 <body>
 <div id="login">
@@ -311,6 +372,154 @@ let session = null, busy = false;
 const esc = s => (s || '').toString().replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const T = RK_I18N.t;
 function KIND(k) { return T('docs.kind.' + k) === 'docs.kind.' + k ? k : T('docs.kind.' + k); }
+
+/* ── 回答渲染：Markdown → 消毒 → 行内引用 ─────────────────────────
+   顺序不可调换：必须先 marked 解析、再 DOMPurify 消毒，最后在 DOM 上做引用替换。
+   若在解析前用正则改字符串，会破坏代码块里的字面文本，并绕过消毒。 */
+
+// 白名单而非黑名单：检索到的文档正文里可能夹带原始 HTML，marked 会原样放行，
+// 只封几个标签挡不住 —— DOMPurify 默认还允许 style 属性，一个 position:fixed 的
+// <div> 就能伪装成真实 UI。这里只放行 Response Format Contract 声明支持的标签，
+// 其余一律剥离（KEEP_CONTENT 默认保留文字，所以内容不会丢）。
+// 不覆盖 ALLOWED_URI_REGEXP —— 默认值已挡掉 javascript: / data:，手写一版极易
+// 漏细节（少一个冒号就放行 [x](javascript:alert())）。
+const MD_PURIFY = {
+  ALLOWED_TAGS: [
+    'h1', 'h2', 'h3', 'p', 'br', 'hr', 'strong', 'em', 'del',
+    'code', 'pre', 'blockquote', 'ul', 'ol', 'li',
+    'table', 'thead', 'tbody', 'tr', 'th', 'td', 'a',
+  ],
+  // align 是 marked 给 GFM 表格列对齐用的；class/style/id 一律不放行
+  ALLOWED_ATTR: ['href', 'title', 'align'],
+};
+
+function renderMarkdown(el, text) {
+  el.innerHTML = DOMPurify.sanitize(marked.parse(text || '', { gfm: true, breaks: true }), MD_PURIFY);
+  // 宽表格自己横向滚动，不撑破 .turn
+  for (const t of el.querySelectorAll('table')) {
+    const wrap = document.createElement('div'); wrap.className = 'tablewrap';
+    t.replaceWith(wrap); wrap.appendChild(t);
+  }
+}
+
+/* 引用 token 泛化匹配：[D18#7460 p.12]、未来的 [CAD#BoltHole12]、[EQ#Pump-A01] 等。
+   kind 为字母前缀，num 为紧随其后的可选数字（D18 → kind=D, num=18）。
+   末尾允许 ` · 分类` 之类的附加后缀：工具描述与首屏提示都把分类写在括号内，
+   模型照着输出 [D18#7460 p.1 · spec] 时不能漏掉（尾部不含 ] 即可）。 */
+const CITE_RE = /\[([A-Za-z][A-Za-z_-]*)(\d*)#([A-Za-z0-9_-]+)(?:\s+p\.(\d+))?(?:\s*·[^\]]*)?\]/g;
+
+/* 把一个匹配解析成可操作对象；无法解析的返回 null → 保持纯文本。
+   现在只认 D（文档）。以后加 CAD / DWG / BOM 只需在这里加分支。 */
+function resolveCite(m, citeMap) {
+  const [raw, kind, num, id, page] = m;
+  if (kind.toUpperCase() !== 'D' || !num) return null;
+  const hit = citeMap.get(`D${num}#${id}`);
+  if (!hit) return null;
+  return { raw, ref: `D${num}#${id}`, page: page || hit.page, cite: hit };
+}
+
+/* 遍历文本节点做替换。跳过 code/pre——那里的 [D18#1] 是字面量，不是引用。 */
+function linkifyCites(root, citeMap, usedRefs) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: n => n.parentElement.closest('code, pre, a')
+      ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+  });
+  const targets = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    CITE_RE.lastIndex = 0;
+    if (CITE_RE.test(n.nodeValue)) targets.push(n);
+  }
+  for (const node of targets) {
+    const frag = document.createDocumentFragment();
+    let last = 0, m;
+    CITE_RE.lastIndex = 0;
+    while ((m = CITE_RE.exec(node.nodeValue))) {
+      const r = resolveCite(m, citeMap);
+      if (!r) continue;   // 解析不到 → 整段留作纯文本
+      if (m.index > last) frag.appendChild(document.createTextNode(node.nodeValue.slice(last, m.index)));
+      const a = document.createElement('span');
+      a.className = 'icite'; a.textContent = r.raw;
+      a.onclick = () => highlightDoc(r.cite.document_id);
+      bindCitePop(a, r.cite);
+      frag.appendChild(a);
+      usedRefs.add(r.ref);
+      last = m.index + r.raw.length;
+    }
+    if (!frag.childNodes.length) continue;
+    if (last < node.nodeValue.length) frag.appendChild(document.createTextNode(node.nodeValue.slice(last)));
+    node.replaceWith(frag);
+  }
+}
+
+/* 引用悬浮预览：显示来源元信息 + 原文片段（snippet 由后端 _track 带下来） */
+let citePopEl = null, citePopShowTimer = null, citePopHideTimer = null;
+
+/* 隐藏留一段宽限期：鼠标从引用移到卡片上的途中会先触发 mouseleave，
+   立刻隐藏的话卡片就永远够不着。进入引用或卡片都取消这次隐藏。 */
+function citePopHold() { clearTimeout(citePopHideTimer); }
+function citePopRelease() {
+  clearTimeout(citePopShowTimer);
+  citePopHideTimer = setTimeout(() => citePopEl && citePopEl.classList.remove('on'), 220);
+}
+function bindCitePop(el, c) {
+  if (!c.snippet) return;
+  el.addEventListener('mouseenter', () => {
+    citePopHold();
+    citePopShowTimer = setTimeout(() => showCitePop(el, c), 300);
+  });
+  el.addEventListener('mouseleave', citePopRelease);
+}
+function showCitePop(el, c) {
+  if (!citePopEl) {
+    citePopEl = document.createElement('div');
+    citePopEl.id = 'citepop';
+    citePopEl.addEventListener('mouseenter', citePopHold);
+    citePopEl.addEventListener('mouseleave', citePopRelease);
+    document.body.appendChild(citePopEl);
+  }
+  const head = [c.filename, c.page ? 'p.' + c.page : '', c.category || ''].filter(Boolean).join(' · ');
+  citePopEl.innerHTML = '';
+  const h = document.createElement('div'); h.className = 'h'; h.textContent = head;
+  const s = document.createElement('div'); s.className = 's'; s.textContent = c.snippet;
+  citePopEl.append(h, s);
+  // 先钉到左上角再量尺寸：不给 left/top 时 fixed 元素会沿用静态位置，量出来的盒子是错的
+  citePopEl.style.left = '0px';
+  citePopEl.style.top = '0px';
+  const r = el.getBoundingClientRect();
+  const w = citePopEl.offsetWidth, hgt = citePopEl.offsetHeight;
+  // 默认落在引用下方；贴边时翻转到上方，再夹回视口内
+  let left = Math.min(Math.max(12, r.left), innerWidth - w - 12);
+  let top = r.bottom + 8;
+  if (top + hgt > innerHeight - 12) top = r.top - hgt - 8;
+  top = Math.min(Math.max(12, top), innerHeight - hgt - 12);
+  citePopEl.style.left = left + 'px';
+  citePopEl.style.top = top + 'px';
+  citePopEl.classList.add('on');
+}
+
+/* 引用 chips：正文引用过的排前面，其余保持后端顺序（即 rerank 降序）；超过 6 个折叠 */
+const CITE_SHOWN = 6;
+function renderCites(turn, citations, usedRefs) {
+  const box = document.createElement('div'); box.className = 'cites';
+  const sorted = citations.slice().sort((a, b) => (usedRefs.has(b.ref) ? 1 : 0) - (usedRefs.has(a.ref) ? 1 : 0));
+  const hidden = [];
+  sorted.forEach((c, i) => {
+    const chip = document.createElement('span'); chip.className = 'cite tap';
+    chip.textContent = `[${c.ref}${c.page ? ' p.' + c.page : ''}${c.category ? ' · ' + c.category : ''}] ${c.filename}`;
+    chip.onclick = () => highlightDoc(c.document_id);
+    bindCitePop(chip, c);
+    if (i >= CITE_SHOWN) { chip.hidden = true; hidden.push(chip); }
+    box.appendChild(chip);
+  });
+  if (hidden.length) {
+    const more = document.createElement('span'); more.className = 'cite more tap';
+    let open = false;
+    const sync = () => { more.textContent = open ? T('cites.collapse') : T('cites.more', { n: hidden.length }); };
+    more.onclick = () => { open = !open; hidden.forEach(c => c.hidden = !open); sync(); };
+    sync(); box.appendChild(more);
+  }
+  turn.appendChild(box);
+}
 const ICON = {
   trace: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6l6 6-6 6"/></svg>',
   pencil: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L18.5 9.5a2 2 0 0 0-2.83-2.83L5 17z"/><path d="M13.5 7.5l3 3"/></svg>',
@@ -537,6 +746,8 @@ async function ask(q, image) {
   turn.innerHTML = `<div class="q">${esc(q) || T('chat.photoQuestionFallback')}</div>` + (image ? `<img class="qimg" src="${image}">` : '') + `<div class="thinking">${T('chat.thinking')}</div>`;
   log.appendChild(turn); scrollDown();
   const thinking = turn.querySelector('.thinking');
+  // 一轮问答的状态收敛在这里，避免跨事件传全局变量
+  const turnState = { answerEl: null, citeMap: new Map(), usedRefs: new Set() };
   try {
     const r = await apiFetch('/api/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session_id: session.session_id, question: q, image: image || undefined }) });
     if (!r.ok) { const j = await r.json().catch(() => ({})); thinking.className = 'thinking err'; thinking.textContent = j.error || r.status; return; }
@@ -548,18 +759,15 @@ async function ask(q, image) {
         turn.insertBefore(t, thinking);
       } else if (ev.t === 'answer') {
         thinking.remove();
-        const a = document.createElement('div'); a.className = 'a'; a.textContent = ev.text; turn.appendChild(a);
+        const a = document.createElement('div'); a.className = 'a md';
+        renderMarkdown(a, ev.text); turn.appendChild(a);
+        turnState.answerEl = a;
       } else if (ev.t === 'done') {
-        if (ev.citations && ev.citations.length) {
-          const box = document.createElement('div'); box.className = 'cites';
-          for (const c of ev.citations) {
-            const chip = document.createElement('span'); chip.className = 'cite tap';
-            chip.textContent = `[${c.ref}${c.page ? ' p.' + c.page : ''}${c.category ? ' · ' + c.category : ''}] ${c.filename}`;
-            chip.onclick = () => highlightDoc(c.document_id);
-            box.appendChild(chip);
-          }
-          turn.appendChild(box);
-        }
+        // citations 随 done 到达，晚于 answer —— 所以行内引用在这里才能解析
+        const cites = ev.citations || [];
+        for (const c of cites) turnState.citeMap.set(c.ref, c);
+        if (turnState.answerEl) linkifyCites(turnState.answerEl, turnState.citeMap, turnState.usedRefs);
+        if (cites.length) renderCites(turn, cites, turnState.usedRefs);
         addFeedback(turn, q);
       } else if (ev.t === 'error') { thinking.className = 'thinking err'; thinking.textContent = ev.message; }
       scrollDown();

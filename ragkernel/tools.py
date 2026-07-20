@@ -157,6 +157,7 @@ class Toolbox:
                 "filename": self._filename(r["document_id"]),
                 "page": r["page_no"],
                 "category": self._category(r),
+                "snippet": (r["text"] or "")[:200],   # 前端引用悬浮预览用
             })
 
     # ── 工具实现 ──────────────────────────────────────────────
@@ -473,7 +474,7 @@ class Toolbox:
         specs = [
             {
                 "name": "search_documents",
-                "description": "在企业知识库（已上传的文档）中混合检索相关片段。返回内容带 [D<文档>#<块> p.<页> · 分类] 引用标记。可选 category 只在某一分类里检索。",
+                "description": "在企业知识库（已上传的文档）中混合检索相关片段。返回内容带 [D<文档>#<块> p.<页>] 引用标记，其后附文件名 · 标题 · 分类。可选 category 只在某一分类里检索。",
                 "input_schema": {
                     "type": "object",
                     "properties": {
