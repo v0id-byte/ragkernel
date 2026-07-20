@@ -105,9 +105,15 @@
   .doc .kind { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--fill); border: 0.5px solid var(--line); margin-left: 6px; color: var(--fg-2); }
   .doc .st-embedded { color: var(--fg-2); }
   .doc .st-chunked, .doc .st-pending { color: var(--fg-3); }
-  .doc .del { color: var(--fg-3); cursor: pointer; padding: 3px; border-radius: 8px; opacity: 0; transition: opacity 140ms ease, color 140ms ease, background 140ms ease; }
-  .doc:hover .del { opacity: 1; }
-  .doc .del:hover { color: var(--danger); background: var(--surface); }
+  .doc .st-archived { color: var(--fg-3); }
+  /* 操作图标落在卡片右下角：align-self 就够了，不必 position:absolute */
+  .doc .acts { align-self: flex-end; display: flex; gap: 2px; opacity: 0; transition: opacity 140ms ease; }
+  .doc:hover .acts { opacity: 1; }
+  .doc .act { color: var(--fg-3); cursor: pointer; padding: 3px; border-radius: 8px; transition: color 140ms ease, background 140ms ease; }
+  .doc .act:hover { color: var(--fg-1); background: var(--surface); }
+  .doc .act svg { width: 17px; height: 17px; display: block; }
+  .doc.archived { opacity: 0.55; }
+  .doc.archived .acts { opacity: 1; }  /* 已归档的卡片常显恢复入口，不必悬停才发现 */
   #upprog { padding: 2px 18px 8px; color: var(--fg-3); font-size: 12.5px; white-space: pre-wrap; }
 
   /* 对话 */
@@ -565,6 +571,8 @@ const ICON = {
   pencil: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L18.5 9.5a2 2 0 0 0-2.83-2.83L5 17z"/><path d="M13.5 7.5l3 3"/></svg>',
   trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14"/><path d="M9 7V5.6A1.6 1.6 0 0 1 10.6 4h2.8A1.6 1.6 0 0 1 15 5.6V7"/><path d="M7 7l1 12a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1l1-12"/></svg>',
   close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M7 7l10 10M17 7L7 17"/></svg>',
+  archive: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7.5h16"/><path d="M5.5 7.5V18a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1V7.5"/><path d="M9.5 11.5l2.5 2.5 2.5-2.5"/></svg>',
+  restore: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7.5h16"/><path d="M5.5 7.5V18a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1V7.5"/><path d="M14.5 13.5L12 11l-2.5 2.5"/></svg>',
 };
 
 function scrollDown() { log.scrollTop = log.scrollHeight; }
@@ -794,7 +802,7 @@ $('#newconv').onclick = () => newConv();
 let convSearchTimer = null;
 $('#convsearch').oninput = () => { clearTimeout(convSearchTimer); convSearchTimer = setTimeout(() => loadConvs(), 250); };
 // 列表是 JS 拼的，applyI18n 够不着，切语言必须自己重画
-RK_I18N.onChange(() => renderConvs(lastConvs));
+RK_I18N.onChange(() => { renderConvs(lastConvs); renderDocs(lastDocs); });
 
 async function boot() {
   RK_I18N.applyI18n();
@@ -808,25 +816,47 @@ async function boot() {
   await newConv();
 }
 
+let lastDocs = [];
+
 async function loadDocs() {
   const r = await apiFetch('/api/documents');
   const j = await r.json();
+  lastDocs = j.documents;
+  renderDocs(lastDocs);
+}
+
+function renderDocs(docs) {
   const list = $('#doclist'); list.innerHTML = '';
-  $('#doccount').textContent = j.documents.length ? j.documents.length + T('docs.countSuffix') : '';
-  for (const d of j.documents) {
+  $('#doccount').textContent = docs.length ? docs.length + T('docs.countSuffix') : '';
+  for (const d of docs) {
     const el = document.createElement('div');
-    el.className = 'doc'; el.dataset.id = d.id;
+    el.className = 'doc' + (d.archived ? ' archived' : ''); el.dataset.id = d.id;
     const kind = d.source_kind && d.source_kind !== 'upload' ? `<span class="kind">${KIND(d.source_kind)}</span>` : '';
+    const tag = d.archived ? `<span class="kind">${T('docs.archivedTag')}</span>` : '';
+    // can_manage 由后端算好（本人或管理员，无主文档仅管理员）——前端不做 owner/admin 推导
+    const act = !d.can_manage ? ''
+      : d.archived ? `<div class="act tap" data-act="unarchive" title="${T('docs.unarchiveTitle')}">${ICON.restore}</div>`
+                   : `<div class="act tap" data-act="archive" title="${T('docs.archiveTitle')}">${ICON.archive}</div>`;
     el.innerHTML = `<div class="body">
-        <div class="name">D${d.id} · ${esc(d.filename)}${kind}</div>
+        <div class="name">D${d.id} · ${esc(d.filename)}${kind}${tag}</div>
         <div class="meta">${d.chunks}${T('docs.chunkSuffix')}${d.page_count ? ' · ' + d.page_count + T('docs.pageSuffix') : ''} · <span class="st-${d.status}">${d.status}</span></div>
-      </div><div class="del tap" title="${T('docs.deleteTitle')}">${ICON.trash}</div>`;
-    el.querySelector('.del').onclick = () => deleteDoc(d.id);
+      </div><div class="acts">${act}</div>`;
+    const btn = el.querySelector('.act');
+    if (btn) btn.onclick = () => setArchived(d.id, btn.dataset.act);
     list.appendChild(el);
   }
 }
 
-async function deleteDoc(id) { await apiFetch('/api/documents/' + id, { method: 'DELETE' }); loadDocs(); }
+async function setArchived(id, action) {
+  const r = await apiFetch(`/api/documents/${id}/${action}`, { method: 'POST' });
+  if (!r.ok) {
+    // apiFetch 只集中处理 401；403（想动别人的文档）要自己说清楚，否则点了没反应
+    const j = await r.json().catch(() => ({}));
+    $('#upprog').textContent = j.error || T('docs.actionFailed');
+    return;
+  }
+  loadDocs();
+}
 
 function highlightDoc(id) {
   document.querySelectorAll('.doc').forEach(e => e.classList.toggle('hl', e.dataset.id == id));
@@ -847,6 +877,8 @@ async function uploadFile(file) {
         const label = T(stageKey) === stageKey ? ev.stage : T(stageKey);
         prog.textContent = label + (ev.chunks ? ' · ' + ev.chunks + T('docs.chunkSuffix') : '');
         if (ev.stage === 'done' || ev.stage === 'skip') { loadDocs(); setTimeout(() => prog.textContent = '', 2500); }
+        // 重传被拒（该文件已被他人归档）也是终态，但提示留在原地——这是需要用户看到的拒绝理由，别 2.5 秒抹掉
+        if (ev.stage === 'archived_by_other') loadDocs();
       } else if (ev.t === 'error') { prog.textContent = T('docs.uploadFailedPrefix') + ev.message; }
     });
   } catch (e) { prog.textContent = T('docs.uploadFailedPrefix') + e; }

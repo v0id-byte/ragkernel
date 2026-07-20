@@ -94,6 +94,10 @@ uv run ragkernel serve        # 打开 http://127.0.0.1:8360
           Humans (CLI · Web)   ·   AI Agents (MCP)
 ```
 
+文档不是只进不出的：每份资料都有**归属**与**生命周期**（active → archived → deleted），
+归档即退出检索但保留数据、可恢复，硬删除仅管理员。检索隔离在 `search.py` 一处收口，
+不交给调用方——详见 [文档生命周期与归属权限](docs/architecture/document-lifecycle.md)。
+
 ---
 
 ## 原生 CAD 摄取（STEP / STL）

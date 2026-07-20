@@ -53,6 +53,21 @@ class Audit:
         self.db.commit()
 
 
+def log_admin_event(kind: str, payload: dict) -> None:
+    """管理员操作留痕。events.session_id 可空——管理动作不属于任何问答会话，
+    故不建新表、也不给 documents 加 deleted_at/deleted_by 墓碑列（行都删了，墓碑无处安放）。
+
+    kind: document_deleted | document_archived | document_unarchived
+    """
+    db = connect()
+    db.execute(
+        "INSERT INTO events(session_id, ts, kind, payload_json) VALUES(NULL,?,?,?)",
+        (int(time.time()), kind, json.dumps(payload, ensure_ascii=False, default=str)),
+    )
+    db.commit()
+    db.close()
+
+
 def query_stats(days: int = 14) -> dict:
     """提问量统计：总数 / 会话数 / 近 N 天按天。"""
     db = connect()

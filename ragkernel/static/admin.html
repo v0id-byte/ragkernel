@@ -75,6 +75,20 @@
   th { color: var(--fg-3); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: 0.02em; }
   .tag { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--fill); border: 0.5px solid var(--line); color: var(--fg-2); margin-left: 6px; }
   .noperm { color: var(--fg-3); padding: 40px 0; text-align: center; }
+  td.sha { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--fg-3); font-size: 12.5px; }
+  .owner-none { color: var(--fg-3); font-style: italic; }
+  tr.archived td { opacity: 0.55; }
+  #kbresult { color: var(--fg-2); font-size: 13px; margin-top: 10px; min-height: 1em; }
+  #kbresult.err { color: var(--danger); }
+  /* 与登录遮罩同款；.show 由 JS 切 */
+  #confirmdlg { position: fixed; inset: 0; z-index: 90; display: none; align-items: center; justify-content: center;
+    background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: blur(6px); }
+  #confirmdlg.show { display: flex; }
+  #confirmdlg .box { background: var(--surface); border: 0.5px solid var(--line-soft); border-radius: var(--radius);
+    padding: 24px; width: min(440px, calc(100vw - 40px)); }
+  #confirmdlg h1 { font-size: 16px; font-weight: 600; margin-bottom: 10px; }
+  #confirmdlg .sub { color: var(--fg-2); font-size: 13.5px; line-height: 1.6; }
+  #confirmdlg #confirmok { background: var(--danger); color: #fff; }
 </style>
 </head>
 <body>
@@ -150,8 +164,37 @@
         <tbody id="userlist"></tbody>
       </table>
     </div>
+    <div class="card">
+      <h2 data-i18n="admin.kb.title">知识库管理</h2>
+      <div class="cardsub" data-i18n="admin.kb.sub">归档 = 从检索中下架、数据保留、可恢复；删除 = 连同索引与 data/uploads 下的原始文件一并抹除，不可撤销。</div>
+      <table>
+        <thead><tr>
+          <th data-i18n="admin.kb.colDoc">文档</th>
+          <th data-i18n="admin.kb.colSha">sha</th>
+          <th data-i18n="admin.kb.colOwner">上传者</th>
+          <th data-i18n="admin.kb.colChunks">片数</th>
+          <th data-i18n="admin.kb.colStatus">状态</th>
+          <th></th>
+        </tr></thead>
+        <tbody id="kblist"></tbody>
+      </table>
+      <div id="kbresult"></div>
+    </div>
   </div>
 </main>
+
+<!-- 硬删除二次确认。自绘而非原生 confirm()：这是不可撤销操作，要说清楚删的是什么、
+     以及「只想退出检索请改用归档」，原生弹窗放不下也没法 i18n。 -->
+<div id="confirmdlg">
+  <div class="box">
+    <h1 id="confirmtitle" data-i18n="admin.kb.confirmTitle">永久删除该文档？</h1>
+    <div class="sub" id="confirmbody"></div>
+    <div class="row" style="margin-top:18px;justify-content:flex-end">
+      <button type="button" class="ghost" id="confirmcancel" data-i18n="admin.kb.confirmCancel">取消</button>
+      <button type="button" id="confirmok" data-i18n="admin.kb.confirmOk">永久删除</button>
+    </div>
+  </div>
+</div>
 <script>
 const $ = s => document.querySelector(s);
 const T = RK_I18N.t;
@@ -243,6 +286,9 @@ $('#logoutbtn').onclick = async () => {
   showLogin();
 };
 
+// 本页渲染库里来的字符串（用户名、文件名），必须转义
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
 function renderUsers(users) {
   $('#userlist').innerHTML = users.map(u => {
     const tags = (u.is_admin ? `<span class="tag">${T('admin.users.tagAdmin')}</span>` : '') + (!u.is_active ? `<span class="tag">${T('admin.users.tagDisabled')}</span>` : '') + (u.needs_setup ? `<span class="tag">${T('admin.users.tagPending')}</span>` : '');
@@ -251,7 +297,7 @@ function renderUsers(users) {
       ? `<button class="ghost" data-act="deactivate" data-id="${u.id}">${T('admin.users.deactivate')}</button>`
       : `<button class="ghost" data-act="activate" data-id="${u.id}">${T('admin.users.activate')}</button>`;
     const status = !u.is_active ? T('admin.users.tagDisabled') : (u.needs_setup ? T('admin.users.tagPending') : T('admin.users.statusActive'));
-    return `<tr><td>${u.username}${tags}</td><td>${status}</td><td>${when}</td><td>${action}</td></tr>`;
+    return `<tr><td>${esc(u.username)}${tags}</td><td>${status}</td><td>${when}</td><td>${action}</td></tr>`;
   }).join('');
   document.querySelectorAll('#userlist button').forEach(btn => {
     btn.onclick = async () => {
@@ -269,7 +315,83 @@ async function loadUsers() {
   lastUsers = j.users;
   renderUsers(j.users);
 }
-RK_I18N.onChange(() => { if (lastUsers) renderUsers(lastUsers); });
+RK_I18N.onChange(() => { if (lastUsers) renderUsers(lastUsers); if (lastDocs) renderDocs(lastDocs); });
+
+// ── 知识库管理 ──────────────────────────────────────────────
+
+function renderDocs(docs) {
+  const body = $('#kblist');
+  if (!docs.length) {
+    body.innerHTML = `<tr><td colspan="6" class="owner-none">${T('admin.kb.empty')}</td></tr>`;
+    return;
+  }
+  body.innerHTML = docs.map(d => {
+    // 上传时落盘用的是原始文件名，两个不同文档可能都叫 foo.pdf——没有 sha 前缀就无从分辨该删哪条
+    const sha = d.sha256 ? `<td class="sha" title="${esc(d.sha256)}">${esc(d.sha256.slice(0, 8))}</td>` : '<td class="sha">—</td>';
+    const owner = d.owner
+      ? `<td>${esc(d.owner)}</td>`
+      : `<td class="owner-none" title="${T('admin.kb.ownerNoneHint')}">${T('admin.kb.ownerNone')}</td>`;
+    const tag = d.archived ? `<span class="tag">${T('docs.archivedTag')}</span>` : '';
+    const toggle = d.archived ? 'unarchive' : 'archive';
+    const acts = `<button class="ghost" data-act="${toggle}" data-id="${d.id}">${T('admin.kb.' + toggle)}</button>`
+      + ` <button class="ghost" data-act="delete" data-id="${d.id}">${T('admin.kb.delete')}</button>`;
+    return `<tr class="${d.archived ? 'archived' : ''}"><td>D${d.id} · ${esc(d.filename)}${tag}</td>${sha}${owner}`
+      + `<td>${d.chunks}</td><td>${esc(d.status)}</td><td style="white-space:nowrap">${acts}</td></tr>`;
+  }).join('');
+
+  body.querySelectorAll('button').forEach(btn => {
+    const doc = docs.find(d => String(d.id) === btn.dataset.id);
+    btn.onclick = () => btn.dataset.act === 'delete' ? confirmDelete(doc) : setArchived(doc.id, btn.dataset.act);
+  });
+}
+
+let lastDocs = null;
+async function loadDocs() {
+  const r = await apiFetch('/admin/api/documents');
+  if (!r.ok) return;
+  const j = await r.json();
+  lastDocs = j.documents;
+  renderDocs(lastDocs);
+}
+
+function kbmsg(text, isErr) {
+  const el = $('#kbresult');
+  el.textContent = text || '';
+  el.className = isErr ? 'err' : '';
+}
+
+async function setArchived(id, action) {
+  // 归档/恢复复用用户侧路由——管理员本来就过 _can_manage_doc，不必另开管理端接口
+  const r = await apiFetch(`/api/documents/${id}/${action}`, { method: 'POST' });
+  if (!r.ok) { const j = await r.json().catch(() => ({})); kbmsg(j.error || T('docs.actionFailed'), true); return; }
+  kbmsg('');
+  loadDocs();
+}
+
+let pendingDelete = null;
+function confirmDelete(doc) {
+  pendingDelete = doc;
+  $('#confirmbody').textContent = T('admin.kb.confirmBody', { filename: doc.filename });
+  $('#confirmdlg').classList.add('show');
+}
+function closeConfirm() { pendingDelete = null; $('#confirmdlg').classList.remove('show'); }
+
+$('#confirmcancel').onclick = closeConfirm;
+$('#confirmdlg').onclick = e => { if (e.target.id === 'confirmdlg') closeConfirm(); };
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeConfirm(); });
+
+$('#confirmok').onclick = async () => {
+  const doc = pendingDelete;
+  closeConfirm();
+  if (!doc) return;
+  const r = await apiFetch(`/admin/api/documents/${doc.id}`, { method: 'DELETE' });
+  const j = await r.json().catch(() => ({}));
+  // 无论成败都重新拉表：行删掉了就点不到第二次，重复点击在这里解决，不必让 API 语义变模糊
+  loadDocs();
+  if (!r.ok) { kbmsg(j.error || T('admin.kb.deleteFailed'), true); return; }
+  // 索引删了但原件在 data/uploads 之外（watch 目录/脚本摄取）——磁盘上留了东西，要说出来
+  kbmsg(j.source_removed === false ? T('admin.kb.sourceKept') : '', false);
+};
 
 $('#createbtn').onclick = async () => {
   const username = $('#newuser').value.trim(), password = $('#newpass').value;
@@ -360,8 +482,10 @@ async function boot() {
   if (!r.ok) { showLogin(T('login.sessionExpiredAdmin')); return; }
   $('#noperm').style.display = 'none'; $('#body').style.display = 'block';
   const j = await r.json();
+  lastUsers = j.users;
   renderUsers(j.users);
   loadProvider();
+  loadDocs();
 }
 
 boot();

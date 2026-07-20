@@ -96,8 +96,55 @@ def _build_chunks(db, doc_id: int, pages, mod) -> list[dict]:
     return chunk_dicts if prechunked else v.on_ingest(doc_row, chunk_dicts)
 
 
-def ingest_file(path, db=None, do_embed: bool = True, on_stage=None) -> dict:
-    """摄取单个文件。on_stage(stage, payload) 用于进度回调(webapp SSE)。"""
+def _settle_reupload(db, sha: str, owner_id: int | None) -> tuple[dict | None, bool]:
+    """重传同一文件时的归属 / 上架判定。返回 (已存在的行, 是否拒绝本次摄取)。
+
+    判定只看**这篇文档现在归谁**，不看谁在调用——恢复上架的规则：
+
+        文档 owner    调用方              恢复上架
+        NULL          CLI/watch/脚本      ✅
+        NULL          任意登录用户        ✅（并认领 owner）
+        本人          本人                ✅
+        他人          任意登录用户        ❌
+        他人          CLI/watch/脚本      ❌  ← 关键
+
+    最后一行是要害：owner_id=None（CLI/watch）**不是**"受信任的本地调用"，它只授予
+    "认领无主文档"的能力，不授予"覆盖他人决定"的能力。否则把文件往被监视目录一丢，
+    别人归档过的文档就自动上架了——watch 目录会变成一条隐藏的权限入口。
+
+    并发保护：check → update 之间会被另一个上传交错，故整段放在 BEGIN IMMEDIATE 里。
+    **只包状态转换**——算 sha 在事务外，parse/chunk/embed 也在事务外，否则一个大 PDF
+    会把 documents 锁住几十秒，把并发上传和检索一起拖死。
+    """
+    own_tx = not db.in_transaction
+    if own_tx:
+        db.execute("BEGIN IMMEDIATE")
+    try:
+        row = store.get_document(db, sha)
+        if not row:
+            return None, False
+        owner, archived = row["owner_id"], row["archived_at"]
+        # Lifecycle invariant：归档是人的决定，只有本人/无主才能由重传撤销
+        if archived and not (owner is None or (owner_id is not None and owner == owner_id)):
+            return dict(row), True
+        if archived:
+            db.execute("UPDATE documents SET archived_at=NULL WHERE id=?", (row["id"],))
+        if owner is None and owner_id:  # Ownership invariant：只回填，不覆盖
+            db.execute("UPDATE documents SET owner_id=? WHERE id=? AND owner_id IS NULL",
+                       (owner_id, row["id"]))
+        return dict(store.get_document(db, sha)), False
+    finally:
+        if own_tx:
+            db.commit()
+
+
+def ingest_file(path, db=None, do_embed: bool = True, on_stage=None, *,
+                owner_id: int | None = None) -> dict:
+    """摄取单个文件。on_stage(stage, payload) 用于进度回调(webapp SSE)。
+
+    owner_id 关键字限定、默认 None：CLI / watch / 脚本摄取产出无主文档（仅管理员可处置），
+    web 上传由 webapp 传入上传者。见 _settle_reupload 的判定表。
+    """
     path = Path(path)
     db = db or store.connect()
     mod = connectors.loader_for(path)
@@ -106,7 +153,12 @@ def ingest_file(path, db=None, do_embed: bool = True, on_stage=None) -> dict:
 
     t0 = time.time()
     sha = store.file_sha256(path)
-    existing = store.get_document(db, sha)
+    existing, blocked = _settle_reupload(db, sha, owner_id)
+    if blocked:
+        store.log_ingestion(db, existing["id"], path.name, "skipped", ms=int((time.time() - t0) * 1000))
+        if on_stage:
+            on_stage("archived_by_other", {"document_id": existing["id"], "filename": path.name})
+        return {"document_id": existing["id"], "skipped": True, "chunks": 0, "blocked": True}
     if existing and existing["status"] == "embedded":
         store.log_ingestion(db, existing["id"], path.name, "skipped", ms=int((time.time() - t0) * 1000))
         if on_stage:
@@ -115,7 +167,7 @@ def ingest_file(path, db=None, do_embed: bool = True, on_stage=None) -> dict:
 
     # 原生 CAD（暴露 load_bundle 的连接器）：单次解析 + 文档/chunks/工程实体原子写入。
     if hasattr(mod, "load_bundle"):
-        return _ingest_cad_file(path, mod, db, sha, do_embed, on_stage, t0)
+        return _ingest_cad_file(path, mod, db, sha, do_embed, on_stage, t0, owner_id)
 
     if on_stage:
         on_stage("loading", {"filename": path.name})
@@ -125,6 +177,7 @@ def ingest_file(path, db=None, do_embed: bool = True, on_stage=None) -> dict:
     doc_id, _ = store.upsert_document(
         db, filename=path.name, sha256=sha, source_path=str(path),
         mime=getattr(mod, "MIME", ""), page_count=len(paged) or len(pages), source_kind=src_kind,
+        owner_id=owner_id,
     )
 
     if on_stage:
@@ -148,7 +201,8 @@ def ingest_file(path, db=None, do_embed: bool = True, on_stage=None) -> dict:
     return {"document_id": doc_id, "skipped": False, "chunks": len(chunk_dicts)}
 
 
-def _ingest_cad_file(path, mod, db, sha: str, do_embed: bool, on_stage, t0: float) -> dict:
+def _ingest_cad_file(path, mod, db, sha: str, do_embed: bool, on_stage, t0: float,
+                     owner_id: int | None = None) -> dict:
     """CAD 摄取路径：load_bundle 一次解析 → 原子写入 → (事务外) embed。
 
     超限 → status='rejected'（保留一个说明性 document 实体 + 一条状态 chunk，不假装成功）。
@@ -164,7 +218,7 @@ def _ingest_cad_file(path, mod, db, sha: str, do_embed: bool, on_stage, t0: floa
     doc_fields = dict(
         filename=path.name, sha256=sha, source_path=str(path),
         mime=getattr(mod, "MIME", ""), page_count=len(paged) or len(pages),
-        source_kind=getattr(mod, "SOURCE_KIND", "upload"),
+        source_kind=getattr(mod, "SOURCE_KIND", "upload"), owner_id=owner_id,
     )
     if on_stage:
         on_stage("chunking", {"filename": path.name})
