@@ -262,10 +262,12 @@ def upload():
         return jsonify({"error": f"文件过大（{ext} 上限 {_ext_max_mb(ext)}MB）"}), 413
 
     q: queue.Queue = queue.Queue()
+    uid = g.user["id"]  # g 是请求作用域；摄取跑在下面的 worker 线程上，必须先取出来
 
     def work():
         try:
-            pipeline.ingest_file(dest, on_stage=lambda s, d: q.put({"t": "stage", "stage": s, **d}))
+            pipeline.ingest_file(dest, owner_id=uid,
+                                 on_stage=lambda s, d: q.put({"t": "stage", "stage": s, **d}))
         except Exception as e:
             q.put({"t": "error", "message": f"{type(e).__name__}: {e}"})
         finally:
