@@ -10,7 +10,13 @@ Turn engineering documents and CAD models into structured, searchable, and **ver
 
 ## Why RagKernel?
 
-Traditional RAG systems flatten engineering documents into text. RagKernel preserves engineering **structure, evidence, provenance, and geometry** — so answers stay **verifiable**, and an AI agent retrieves engineering evidence instead of fabricating engineering facts.
+RagKernel started as a personal tool.
+
+While developing embedded systems and designing PCBs, I repeatedly searched through hundreds of pages of datasheets, reference manuals, and technical documents. Existing RAG systems could retrieve relevant text, but they often lost engineering context and the connection between an answer and its original evidence.
+
+I also found that general-purpose AI assistants often struggled with engineering documents. They could produce plausible answers from datasheets, but those answers were not always grounded in the actual specification or supported by clear evidence.
+
+Traditional RAG pipelines flatten engineering documents into text chunks. RagKernel preserves engineering **structure, evidence, provenance, and geometry** — enabling humans and AI agents to retrieve engineering knowledge that is traceable and verifiable.
 
 ## Capabilities
 
