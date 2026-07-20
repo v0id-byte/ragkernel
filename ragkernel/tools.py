@@ -260,8 +260,13 @@ class Toolbox:
         self.touched.clear()
 
     def read_document(self, document_id: int) -> str:
+        # Retrieval invariant：本函数直接读 chunks，绕开了 search._ACTIVE，故自己挡一次。
+        # 写成单一路径（把未归档条件并进 WHERE），不分"不存在直接返回 / 已归档另走一支"——
+        # 两条分支迟早会在返回文案上分叉，变成一个存在性预言机。
         rows = self.db.execute(
-            "SELECT * FROM chunks WHERE document_id=? ORDER BY chunk_index", (int(document_id),)
+            "SELECT c.* FROM chunks c JOIN documents d ON d.id = c.document_id "
+            "WHERE c.document_id=? AND d.archived_at IS NULL ORDER BY c.chunk_index",
+            (int(document_id),),
         ).fetchall()
         self._track(rows)
         self.audit("tool:read_document", {"document_id": document_id, "n": len(rows)})

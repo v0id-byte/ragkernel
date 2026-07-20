@@ -127,6 +127,18 @@ def list_users() -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def usernames_by_ids(ids) -> dict[int, str]:
+    """id → username。documents.owner_id 在 ragkernel.db、用户名在 auth.db，跨库没法 join，
+    只能取回来在 Python 里映射。"""
+    ids = [i for i in set(ids) if i is not None]
+    if not ids:
+        return {}
+    ph = ",".join("?" * len(ids))
+    db = connect()
+    rows = db.execute(f"SELECT id, username FROM users WHERE id IN ({ph})", ids).fetchall()
+    return {r["id"]: r["username"] for r in rows}
+
+
 def set_active(user_id: int, active: bool):
     db = connect()
     db.execute("UPDATE users SET is_active=? WHERE id=?", (int(active), user_id))

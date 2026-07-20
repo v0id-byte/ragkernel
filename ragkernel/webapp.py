@@ -222,18 +222,69 @@ def _sse(gen):
 
 
 # ── 文档管理 ──────────────────────────────────────────────────
+#
+# 归档 = 可逆的下架：退出检索、数据保留。硬删除仅管理员，走 /admin/api。
+# 权限一律在后端算好随文档下发（can_manage / can_delete），前端不做 is_owner || is_admin
+# 这类推导——将来加角色时才不用同时改两处。
+
+def _is_admin() -> bool:
+    # 不用 bool(...)：is_admin 现在是 sqlite INTEGER 取出来的 int，bool(0) 确实为假，
+    # 但权限代码不该建立在「上游恰好给的是 int」上——哪天换成从 JSON 读，bool("0") 就是 True。
+    return int(g.user["is_admin"] or 0) == 1
+
+
+def _can_manage_doc(row) -> bool:
+    """本人文档或管理员可归档；owner_id 为 NULL 的历史文档仅管理员。"""
+    return _is_admin() or (row["owner_id"] is not None and row["owner_id"] == g.user["id"])
+
+
+def _doc_view(d: dict) -> dict:
+    """下发给前端的文档视图。刻意不含 owner_id——那是 auth.db 的标识符，前端不需要原料。"""
+    out = {k: v for k, v in d.items() if k not in ("owner_id", "archived_at", "source_path")}
+    out["archived"] = d["archived_at"] is not None
+    out["can_manage"] = _can_manage_doc(d)
+    out["can_delete"] = _is_admin()
+    return out
+
 
 @app.get("/api/documents")
 @auth.require_auth
 def documents():
-    return jsonify({"documents": store.list_documents(store.connect())})
+    # 含已归档：归档是生命周期可见性，不是访问控制——「这份资料被下架了」本身需要共知，
+    # 否则用户会反复重传同一份文件。他人的归档文档只是 can_manage=false、没有按钮。
+    docs = store.list_all_documents(store.connect())
+    return jsonify({"documents": [_doc_view(d) for d in docs]})
 
 
-@app.delete("/api/documents/<int:doc_id>")
+def _archive(doc_id: int, ts: int | None):
+    db = store.connect()
+    row = store.get_document_by_id(db, doc_id)
+    if not row:
+        return jsonify({"error": "文档不存在"}), 404
+    if not _can_manage_doc(row):
+        return jsonify({"error": "只能归档自己上传的文档"}), 403
+    store.set_archived(db, doc_id, ts)
+    audit.log_admin_event("document_archived" if ts else "document_unarchived", {
+        "document_id": doc_id, "filename": row["filename"], "sha256": row["sha256"],
+        "owner_id": row["owner_id"], "operator_id": g.user["id"], "operator_name": g.user["username"],
+    })
+    return jsonify({"ok": True, "archived": ts is not None})
+
+
+@app.post("/api/documents/<int:doc_id>/archive")
 @auth.require_auth
-def delete_document(doc_id: int):
-    n = store.delete_document(store.connect(), doc_id)
-    return jsonify({"deleted": doc_id, "chunks": n})
+def archive_document(doc_id: int):
+    return _archive(doc_id, int(time.time()))
+
+
+@app.post("/api/documents/<int:doc_id>/unarchive")
+@auth.require_auth
+def unarchive_document(doc_id: int):
+    return _archive(doc_id, None)
+
+# 原先这里有 DELETE /api/documents/<id>，只挂 @require_auth —— 任何登录用户都能硬删任何人的
+# 文档并级联删掉 chunks/向量/工程实体。整条路由删除而非改挂 @require_admin：删掉的路由不会被
+# 误放宽，收窄的会。硬删除现在只在 /admin/api/documents/<id>。
 
 
 @app.post("/api/upload")
@@ -496,6 +547,70 @@ def admin_deactivate_user(user_id: int):
 def admin_activate_user(user_id: int):
     auth.set_active(user_id, True)
     return jsonify({"ok": True})
+
+
+# ── 知识库管理（全量文档 + 硬删除）────────────────────────────
+
+def _remove_source_file(source_path: str | None) -> bool:
+    """仅删 data/uploads 内的原件——库外路径（watch 目录、脚本摄取的源文件）绝不动。
+
+    基准目录必须现算：config.data_dir() 会经 RAGKERNEL_DATA_DIR 与 settings 解析，
+    docker volume / systemd 部署下的真实路径和仓库相对路径不是一回事。写成字面量
+    Path("data/uploads") 会让护栏失效，进而删到不该删的文件。
+    """
+    if not source_path:
+        return False
+    updir = (config.data_dir() / "uploads").resolve()
+    try:
+        p = Path(source_path).resolve()
+        if p.is_relative_to(updir) and p.is_file():
+            p.unlink()
+            return True
+    except (OSError, ValueError):
+        pass
+    return False
+
+
+@app.get("/admin/api/documents")
+@auth.require_admin_ip
+@auth.require_auth
+@auth.require_admin
+def admin_list_documents():
+    docs = store.list_all_documents(store.connect())
+    names = auth.usernames_by_ids(d["owner_id"] for d in docs)
+    for d in docs:
+        d["archived"] = d["archived_at"] is not None
+        d["owner"] = names.get(d["owner_id"])  # None = 无主（历史遗留/脚本导入）
+        d.pop("source_path", None)             # 服务端绝对路径不外泄
+    return jsonify({"documents": docs})
+
+
+@app.delete("/admin/api/documents/<int:doc_id>")
+@auth.require_admin_ip
+@auth.require_auth
+@auth.require_admin
+def admin_delete_document(doc_id: int):
+    db = store.connect()
+    # 先把元数据快照出来再删：审计 payload 绝不能在删除之后回库读行。
+    # 今天或许"恰好"还持有删除前的 Row，但那是巧合——谁改一下 delete_document 的内部实现，
+    # 审计就静默地只剩一个孤零零的 id，而且没有任何测试会失败。
+    row = store.get_document_by_id(db, doc_id)
+    if not row:
+        return jsonify({"error": "文档不存在"}), 404
+    snap = {"document_id": doc_id, "filename": row["filename"], "sha256": row["sha256"],
+            "owner_id": row["owner_id"]}
+    source_path = row["source_path"]
+
+    chunks = store.delete_document(db, doc_id)
+    # 顺序：DB 级联成功之后再删文件，避免 DB 失败却留下"有文件没索引"。
+    # 两步各自成败分开上报——DB 删成功而文件没删掉时，管理员要能看出磁盘上留了垃圾。
+    source_removed = _remove_source_file(source_path)
+    audit.log_admin_event("document_deleted", {
+        **snap, "source_removed": source_removed,
+        "operator_id": g.user["id"], "operator_name": g.user["username"],
+    })
+    return jsonify({"deleted": doc_id, "chunks": chunks,
+                    "index_removed": True, "source_removed": source_removed})
 
 
 # ── AI 服务提供方设置（云端 API Key，或指向已在跑的本地推理服务）──
