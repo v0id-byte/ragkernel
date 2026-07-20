@@ -23,10 +23,12 @@ CREATE TABLE IF NOT EXISTS documents(
   mime TEXT,
   sha256 TEXT UNIQUE NOT NULL,
   page_count INTEGER,
-  status TEXT DEFAULT 'pending',
+  status TEXT DEFAULT 'pending',           -- 摄取状态（机器的事实）：pending|chunked|embedded|rejected|embedding_failed
   source_kind TEXT DEFAULT 'upload',       -- upload | ticket_import | feedback
   meta_json TEXT,
-  created_at INTEGER
+  created_at INTEGER,
+  owner_id INTEGER,                        -- auth.db users.id；NULL = 历史遗留/脚本导入，仅管理员可处置
+  archived_at INTEGER                      -- 可用状态（人的决策）：NULL = 在架；非 NULL = 已归档（退出检索、数据保留）
 );
 CREATE TABLE IF NOT EXISTS ingestion_log(
   id INTEGER PRIMARY KEY,
@@ -80,6 +82,17 @@ END;
 """
 
 
+def _migrate(db: sqlite3.Connection) -> None:
+    """给旧库补 documents 的 owner_id / archived_at 两列。两列都可空，ALTER 即可，不必重建表。
+    与 auth._migrate 同一路子：靠 PRAGMA 判断，幂等，每次 connect 只花一次 PRAGMA 的钱。"""
+    cols = {r["name"] for r in db.execute("PRAGMA table_info(documents)")}
+    if "owner_id" not in cols:
+        db.execute("ALTER TABLE documents ADD COLUMN owner_id INTEGER")
+    if "archived_at" not in cols:
+        db.execute("ALTER TABLE documents ADD COLUMN archived_at INTEGER")
+    db.commit()
+
+
 def connect() -> sqlite3.Connection:
     db = sqlite3.connect(config.data_dir() / "ragkernel.db", check_same_thread=False)
     db.row_factory = sqlite3.Row
@@ -89,6 +102,7 @@ def connect() -> sqlite3.Connection:
     sqlite_vec.load(db)
     db.enable_load_extension(False)
     db.executescript(SCHEMA)
+    _migrate(db)
     db.execute(
         "CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING "
         f"vec0(chunk_id INTEGER PRIMARY KEY, embedding float[{EMBED_DIM}] distance_metric=cosine)"
@@ -116,19 +130,40 @@ def get_document(db: sqlite3.Connection, sha256: str) -> sqlite3.Row | None:
     return db.execute("SELECT * FROM documents WHERE sha256=?", (sha256,)).fetchone()
 
 
+def get_document_by_id(db: sqlite3.Connection, document_id: int) -> sqlite3.Row | None:
+    return db.execute("SELECT * FROM documents WHERE id=?", (document_id,)).fetchone()
+
+
+def set_archived(db: sqlite3.Connection, document_id: int, ts: int | None) -> None:
+    """置/清可用状态。ts=None 即恢复上架。"""
+    db.execute("UPDATE documents SET archived_at=? WHERE id=?", (ts, document_id))
+    db.commit()
+
+
+def set_owner(db: sqlite3.Connection, document_id: int, owner_id: int) -> None:
+    """认领无主文档。带 `AND owner_id IS NULL` 兜底——见 Ownership invariant，有主的绝不改写。"""
+    db.execute("UPDATE documents SET owner_id=? WHERE id=? AND owner_id IS NULL", (owner_id, document_id))
+    db.commit()
+
+
 def _upsert_document_tx(
     db: sqlite3.Connection, filename: str, sha256: str, source_path: str = "",
     mime: str = "", page_count: int = 0, meta_json: str = "", source_kind: str = "upload",
+    owner_id: int | None = None,
 ) -> tuple[int, bool]:
     """upsert_document 的**不提交**版本，供同一事务内组合（CAD 原子摄取）。返回 (document_id, existed)。"""
     row = get_document(db, sha256)
     if row:
+        # Ownership invariant：owner 只允许 NULL → 具体值的回填，绝不被后续摄取覆盖。
+        # 无主文档（CLI/watch/脚本导入的历史数据）可被首个上传者认领；已有主的一律原样保留。
+        if owner_id and row["owner_id"] is None:
+            db.execute("UPDATE documents SET owner_id=? WHERE id=? AND owner_id IS NULL", (owner_id, row["id"]))
         return row["id"], True
     cur = db.execute(
-        "INSERT INTO documents(filename,source_path,mime,sha256,page_count,status,source_kind,meta_json,created_at) "
-        "VALUES(?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO documents(filename,source_path,mime,sha256,page_count,status,source_kind,meta_json,created_at,owner_id) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?)",
         (filename, source_path or None, mime or None, sha256, page_count or None,
-         "pending", source_kind, meta_json or None, int(time.time())),
+         "pending", source_kind, meta_json or None, int(time.time()), owner_id),
     )
     return cur.lastrowid, False
 
@@ -136,10 +171,12 @@ def _upsert_document_tx(
 def upsert_document(
     db: sqlite3.Connection, filename: str, sha256: str, source_path: str = "",
     mime: str = "", page_count: int = 0, meta_json: str = "", source_kind: str = "upload",
+    owner_id: int | None = None,
 ) -> tuple[int, bool]:
     """按 sha256 幂等。返回 (document_id, existed)。"""
     with db:  # 提交/回滚由上下文管理器负责
-        return _upsert_document_tx(db, filename, sha256, source_path, mime, page_count, meta_json, source_kind)
+        return _upsert_document_tx(db, filename, sha256, source_path, mime, page_count,
+                                   meta_json, source_kind, owner_id)
 
 
 def log_ingestion(db, document_id, filename, action, chunks=0, added=0, removed=0, ms=0):
@@ -232,23 +269,29 @@ def ingest_cad_atomic(db: sqlite3.Connection, doc_fields: dict, build_chunks, en
             "added": added, "removed": removed, "entities": n_ent}
 
 
+# Retrieval invariant（结构化侧）：CAD 工程实体走的是与文本检索完全不同的通路——不经 hybrid_search，
+# 因而不受 search._ACTIVE 保护。六个 CAD 工具全部收口在下面这两个读函数上，故过滤只需写这一次。
+_ACTIVE_DOC = "document_id IN (SELECT id FROM documents WHERE archived_at IS NULL)"
+
+
 def get_engineering_entities(db: sqlite3.Connection, document_id: int,
                              entity_type: str | None = None) -> list[dict]:
     if entity_type:
         rows = db.execute(
-            "SELECT * FROM engineering_entities WHERE document_id=? AND entity_type=? ORDER BY id",
+            f"SELECT * FROM engineering_entities WHERE document_id=? AND entity_type=? AND {_ACTIVE_DOC} ORDER BY id",
             (document_id, entity_type),
         ).fetchall()
     else:
         rows = db.execute(
-            "SELECT * FROM engineering_entities WHERE document_id=? ORDER BY id", (document_id,)
+            f"SELECT * FROM engineering_entities WHERE document_id=? AND {_ACTIVE_DOC} ORDER BY id",
+            (document_id,),
         ).fetchall()
     return [dict(r) for r in rows]
 
 
 def get_engineering_entity(db: sqlite3.Connection, document_id: int, entity_uid: str) -> dict | None:
     row = db.execute(
-        "SELECT * FROM engineering_entities WHERE document_id=? AND entity_uid=?",
+        f"SELECT * FROM engineering_entities WHERE document_id=? AND entity_uid=? AND {_ACTIVE_DOC}",
         (document_id, entity_uid),
     ).fetchone()
     return dict(row) if row else None
@@ -294,10 +337,28 @@ def delete_document(db: sqlite3.Connection, document_id: int) -> int:
     return len(cids)
 
 
+_DOC_COLS = ("d.id, d.filename, d.page_count, d.status, d.source_kind, d.created_at, "
+             "  (SELECT COUNT(*) FROM chunks c WHERE c.document_id=d.id) AS chunks ")
+
+
 def list_documents(db: sqlite3.Connection) -> list[dict]:
+    """**只返回在架文档。** agent / MCP 唯一该走的入口——已归档的文档对模型不可见。"""
     rows = db.execute(
-        "SELECT d.id, d.filename, d.page_count, d.status, d.source_kind, d.created_at, "
-        "  (SELECT COUNT(*) FROM chunks c WHERE c.document_id=d.id) AS chunks "
+        f"SELECT {_DOC_COLS} FROM documents d WHERE d.archived_at IS NULL ORDER BY d.id DESC"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_all_documents(db: sqlite3.Connection) -> list[dict]:
+    """含已归档，并带出 owner/归档/sha/原始路径。
+
+    **仅供 HTTP 层调用**（webapp 的 /api/documents 与 /admin/api/documents）——它们会在返回前
+    按调用者身份算好 can_manage/can_delete。**不要从 tools.py / mcp 调用本函数**：那等于让模型
+    看到已下架的资料，破坏 Retrieval invariant。刻意不做成 list_documents(include_archived=True)
+    的布尔开关——开关可翻转且 review 时不显眼，函数名把边界写死。
+    """
+    rows = db.execute(
+        f"SELECT {_DOC_COLS}, d.owner_id, d.archived_at, d.sha256, d.source_path "
         "FROM documents d ORDER BY d.id DESC"
     ).fetchall()
     return [dict(r) for r in rows]

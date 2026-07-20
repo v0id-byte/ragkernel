@@ -21,12 +21,39 @@ def fx():
 
 
 @pytest.fixture
-def cad_db(tmp_path, monkeypatch):
+def db(tmp_path, monkeypatch):
+    """隔离到临时库的连接。不依赖任何 CAD extra，非 CAD 测试也用它。"""
     monkeypatch.setenv("RAGKERNEL_DATA_DIR", str(tmp_path))
     from ragkernel import store
-    db = store.connect()
-    yield db
-    db.close()
+    conn = store.connect()
+    yield conn
+    conn.close()
+
+
+@pytest.fixture
+def cad_db(db):
+    """`db` 的别名——CAD 测试沿用原名。"""
+    return db
+
+
+@pytest.fixture
+def doc(db):
+    """插一篇可被 BM25 检索到的文档（doc + 一个 chunk）。返回 document_id。"""
+    from ragkernel import chunking, store
+
+    def _doc(text: str, *, sha: str = "", filename: str = "t.md",
+             status: str = "chunked", owner_id: int | None = None) -> int:
+        sha = sha or store.content_hash(text, filename)
+        doc_id, _ = store.upsert_document(db, filename=filename, sha256=sha, owner_id=owner_id)
+        store.upsert_chunks(db, doc_id, [{
+            "document_id": doc_id, "chunk_index": 0, "title": filename, "page_no": None,
+            "text": text, "text_seg": chunking.seg(text), "meta_json": None,
+            "content_hash": store.content_hash(doc_id, text),
+        }])
+        store.set_status(db, doc_id, status)
+        return doc_id
+
+    return _doc
 
 
 @pytest.fixture
