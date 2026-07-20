@@ -164,6 +164,12 @@ def main():
     sub.add_parser("models", help="预载/下载本地模型")
     sub.add_parser("serve", help="启动 Web 服务（上传 + 带引用问答）")
 
+    p = sub.add_parser("doctor", help="环境自查（装完/出问题时跑）")
+    p.add_argument("--json", action="store_true", help="机器可读输出（供监控/K8s probe）")
+    p.add_argument("--offline", action="store_true", help="跳过所有网络检查")
+    p.add_argument("--strict", action="store_true", help="把 warning 也当致命（只改退出码，不改 severity）")
+    p.add_argument("--verbose", action="store_true", help="显示主机名、耗时与异常详情")
+
     p = sub.add_parser("ask", help="命令行问一个问题")
     p.add_argument("question")
 
@@ -221,6 +227,10 @@ def main():
         cmd_mcp(args)
     elif args.cmd == "token":
         cmd_token(args)
+    elif args.cmd == "doctor":
+        from . import doctor
+
+        sys.exit(doctor.main(args))
     elif args.cmd == "serve":
         from . import webapp
 
