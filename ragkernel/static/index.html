@@ -1,9 +1,10 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="zh" data-i18n-doc-title="meta.titleIndex">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ragkernel · 企业知识库</title>
+<script src="/static/i18n.js"></script>
 <style>
   /* Apple 中性灰系统 —— 无强彩色，单一石墨主色，发丝分隔线 */
   :root {
@@ -194,7 +195,8 @@
   /* 登录界面（未登录时的全屏遮罩） */
   #login { position: fixed; inset: 0; z-index: 80; display: none; align-items: center; justify-content: center; background: var(--bg); }
   #login.show { display: flex; }
-  #login .box { width: min(360px, 88vw); background: var(--surface); border: 0.5px solid var(--line); border-radius: var(--radius-lg); padding: 28px 26px; box-shadow: 0 30px 80px rgba(0,0,0,.18); }
+  #login .box { position: relative; width: min(360px, 88vw); background: var(--surface); border: 0.5px solid var(--line); border-radius: var(--radius-lg); padding: 28px 26px; box-shadow: 0 30px 80px rgba(0,0,0,.18); }
+  #login #langtoggle-login { position: absolute; top: 16px; right: 16px; width: auto; height: 28px; padding: 0 10px; font-size: 12px; font-weight: 500; margin: 0; }
   #login h1 { font-size: 19px; font-weight: 600; letter-spacing: -0.02em; margin-bottom: 4px; }
   #login .sub { color: var(--fg-3); font-size: 13px; margin-bottom: 18px; }
   #login input { width: 100%; background: var(--surface-2); border: 0.5px solid var(--line); border-radius: 10px; padding: 10px 12px; color: var(--fg); font: inherit; font-size: 14px; margin-bottom: 10px; outline: none; transition: border-color 140ms ease; }
@@ -301,38 +303,40 @@
 <div id="login">
   <div class="box">
     <h1>ragkernel</h1>
-    <div class="sub">企业知识库 · 登录后可提问</div>
+    <div class="sub" data-i18n="login.subIndex">企业知识库 · 登录后可提问</div>
     <form id="loginstep-user">
-      <input id="loginuser" autocomplete="username" placeholder="用户名" required>
-      <button type="submit">继续</button>
+      <input id="loginuser" autocomplete="username" data-i18n-placeholder="login.usernamePlaceholder" placeholder="用户名" required>
+      <button type="submit" data-i18n="login.continue">继续</button>
     </form>
     <form id="loginstep-pass" hidden>
-      <div class="whoami">账号：<b id="whoami-pass"></b><a href="#" id="backfrompass">换一个</a></div>
-      <input id="loginpass" type="password" autocomplete="current-password" placeholder="密码" required>
-      <button type="submit">登录</button>
+      <div class="whoami"><span data-i18n="login.accountLabel">账号：</span><b id="whoami-pass"></b><a href="#" id="backfrompass" data-i18n="login.changeAccount">换一个</a></div>
+      <input id="loginpass" type="password" autocomplete="current-password" data-i18n-placeholder="login.passwordPlaceholder" placeholder="密码" required>
+      <button type="submit" data-i18n="login.loginBtn">登录</button>
     </form>
     <form id="loginstep-setup" hidden>
-      <div class="whoami">账号：<b id="whoami-setup"></b><a href="#" id="backfromsetup">换一个</a></div>
-      <div class="sub">首次登录，请输入管理员给你的建号口令并设置密码</div>
-      <input id="setupcode" autocomplete="off" placeholder="建号口令" required>
-      <input id="setuppass" type="password" autocomplete="new-password" placeholder="设置密码（至少 6 位）" required>
-      <button type="submit">设置密码并登录</button>
+      <div class="whoami"><span data-i18n="login.accountLabel">账号：</span><b id="whoami-setup"></b><a href="#" id="backfromsetup" data-i18n="login.changeAccount">换一个</a></div>
+      <div class="sub" data-i18n="login.setupSubIndex">首次登录，请输入管理员给你的建号口令并设置密码</div>
+      <input id="setupcode" autocomplete="off" data-i18n-placeholder="login.setupCodePlaceholder" placeholder="建号口令" required>
+      <input id="setuppass" type="password" autocomplete="new-password" data-i18n-placeholder="login.setupPasswordPlaceholder" placeholder="设置密码（至少 6 位）" required>
+      <button type="submit" data-i18n="login.setupBtn">设置密码并登录</button>
     </form>
     <div id="loginerr"></div>
+    <button type="button" class="ghost tap" id="langtoggle-login" data-i18n-title="nav.langToggle">中/EN</button>
   </div>
 </div>
 <header>
-  <button class="ghost tap" id="docsbtn" title="文档"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
-  <span class="brand">ragkernel</span><span class="sub">企业知识库 · 本地检索 · 带引用问答</span>
+  <button class="ghost tap" id="docsbtn" data-i18n-title="nav.docsTitle" title="文档"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+  <span class="brand">ragkernel</span><span class="sub" data-i18n="header.subFull">企业知识库 · 本地检索 · 带引用问答</span>
   <span class="spacer"></span>
-  <button class="ghost" id="dashbtn"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19h16"/><path d="M7 19v-5"/><path d="M12 19v-9"/><path d="M17 19v-7"/></svg>仪表盘</button>
-  <button class="ghost" id="logoutbtn">退出</button>
+  <button class="ghost" id="dashbtn"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19h16"/><path d="M7 19v-5"/><path d="M12 19v-9"/><path d="M17 19v-7"/></svg><span data-i18n="nav.dashboard">仪表盘</span></button>
+  <button class="ghost" id="logoutbtn" data-i18n="nav.logout">退出</button>
+  <button class="ghost tap" id="langtoggle" data-i18n-title="nav.langToggle">中/EN</button>
 </header>
 <div id="main">
   <div id="docs-scrim"></div>
   <aside id="docs">
-    <div class="hd"><span>文档</span><span class="sub" id="doccount"></span></div>
-    <div id="drop">拖拽文件到此，或点击选择<br><span class="sub">PDF · Word · PPT · Markdown · CSV/Excel 工单，自动索引</span></div>
+    <div class="hd"><span data-i18n="docs.title">文档</span><span class="sub" id="doccount"></span></div>
+    <div id="drop"><span data-i18n="docs.dropText">拖拽文件到此，或点击选择</span><br><span class="sub" data-i18n="docs.dropSub">PDF · Word · PPT · Markdown · CSV/Excel 工单，自动索引</span></div>
     <input type="file" id="file" hidden>
     <div id="upprog"></div>
     <div id="doclist"></div>
@@ -342,9 +346,9 @@
     <div id="bar">
       <div id="imgprev"></div>
       <form id="form" action="javascript:void 0">
-        <label class="icon-btn tap" id="photobtn" title="拍照/上传故障照片（错误屏 / 铭牌）"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8.8A1.8 1.8 0 0 1 5.8 7h1.6l.9-1.5A1 1 0 0 1 9.9 5h4.2a1 1 0 0 1 .86.5L15.6 7h1.6A1.8 1.8 0 0 1 19 8.8v7.4A1.8 1.8 0 0 1 17.2 18H5.8A1.8 1.8 0 0 1 4 16.2z"/><circle cx="12" cy="12.4" r="3"/></svg><input type="file" id="photo" accept="image/*" capture="environment" hidden></label>
-        <input id="in" autocomplete="off" autofocus placeholder="向知识库提问……可附故障照片" spellcheck="false">
-        <button id="send" type="submit">提问</button>
+        <label class="icon-btn tap" id="photobtn" data-i18n-title="nav.photoTitle" title="拍照/上传故障照片（错误屏 / 铭牌）"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8.8A1.8 1.8 0 0 1 5.8 7h1.6l.9-1.5A1 1 0 0 1 9.9 5h4.2a1 1 0 0 1 .86.5L15.6 7h1.6A1.8 1.8 0 0 1 19 8.8v7.4A1.8 1.8 0 0 1 17.2 18H5.8A1.8 1.8 0 0 1 4 16.2z"/><circle cx="12" cy="12.4" r="3"/></svg><input type="file" id="photo" accept="image/*" capture="environment" hidden></label>
+        <input id="in" autocomplete="off" autofocus data-i18n-placeholder="chat.inputPlaceholder" placeholder="向知识库提问……可附故障照片" spellcheck="false">
+        <button id="send" type="submit" data-i18n="chat.send">提问</button>
       </form>
     </div>
   </section>
@@ -354,8 +358,8 @@
   <div id="scrim"></div>
   <div id="dashbox">
     <div class="top">
-      <div><h2>知识库仪表盘</h2><div class="sub">文件 · 片段 · 索引 · 提问 —— 均有记录</div></div>
-      <button id="dashclose" title="关闭"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M7 7l10 10M17 7L7 17"/></svg></button>
+      <div><h2 data-i18n="dash.title">知识库仪表盘</h2><div class="sub" data-i18n="dash.sub">文件 · 片段 · 索引 · 提问 —— 均有记录</div></div>
+      <button id="dashclose" data-i18n-title="nav.closeTitle" title="关闭"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M7 7l10 10M17 7L7 17"/></svg></button>
     </div>
     <div id="dashbody"></div>
   </div>
@@ -366,16 +370,27 @@ const $ = s => document.querySelector(s);
 const log = $('#log'), input = $('#in'), drop = $('#drop'), fileInput = $('#file');
 let session = null, busy = false;
 const esc = s => (s || '').toString().replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-const KIND = { upload: '上传', ticket_import: '工单导入', feedback: '反馈案例' };
+const T = RK_I18N.t;
+function KIND(k) { return T('docs.kind.' + k) === 'docs.kind.' + k ? k : T('docs.kind.' + k); }
 
 /* ── 回答渲染：Markdown → 消毒 → 行内引用 ─────────────────────────
    顺序不可调换：必须先 marked 解析、再 DOMPurify 消毒，最后在 DOM 上做引用替换。
    若在解析前用正则改字符串，会破坏代码块里的字面文本，并绕过消毒。 */
 
-// 不覆盖 ALLOWED_URI_REGEXP —— DOMPurify 的默认值已经挡掉 javascript: / data: 等协议，
-// 手写一版极易漏掉细节（少一个冒号就放行 [x](javascript:alert())）。
+// 白名单而非黑名单：检索到的文档正文里可能夹带原始 HTML，marked 会原样放行，
+// 只封几个标签挡不住 —— DOMPurify 默认还允许 style 属性，一个 position:fixed 的
+// <div> 就能伪装成真实 UI。这里只放行 Response Format Contract 声明支持的标签，
+// 其余一律剥离（KEEP_CONTENT 默认保留文字，所以内容不会丢）。
+// 不覆盖 ALLOWED_URI_REGEXP —— 默认值已挡掉 javascript: / data:，手写一版极易
+// 漏细节（少一个冒号就放行 [x](javascript:alert())）。
 const MD_PURIFY = {
-  FORBID_TAGS: ['style', 'script', 'iframe', 'form', 'input', 'details', 'object', 'embed', 'img'],
+  ALLOWED_TAGS: [
+    'h1', 'h2', 'h3', 'p', 'br', 'hr', 'strong', 'em', 'del',
+    'code', 'pre', 'blockquote', 'ul', 'ol', 'li',
+    'table', 'thead', 'tbody', 'tr', 'th', 'td', 'a',
+  ],
+  // align 是 marked 给 GFM 表格列对齐用的；class/style/id 一律不放行
+  ALLOWED_ATTR: ['href', 'title', 'align'],
 };
 
 function renderMarkdown(el, text) {
@@ -388,8 +403,10 @@ function renderMarkdown(el, text) {
 }
 
 /* 引用 token 泛化匹配：[D18#7460 p.12]、未来的 [CAD#BoltHole12]、[EQ#Pump-A01] 等。
-   kind 为字母前缀，num 为紧随其后的可选数字（D18 → kind=D, num=18）。 */
-const CITE_RE = /\[([A-Za-z][A-Za-z_-]*)(\d*)#([A-Za-z0-9_-]+)(?:\s+p\.(\d+))?\]/g;
+   kind 为字母前缀，num 为紧随其后的可选数字（D18 → kind=D, num=18）。
+   末尾允许 ` · 分类` 之类的附加后缀：工具描述与首屏提示都把分类写在括号内，
+   模型照着输出 [D18#7460 p.1 · spec] 时不能漏掉（尾部不含 ] 即可）。 */
+const CITE_RE = /\[([A-Za-z][A-Za-z_-]*)(\d*)#([A-Za-z0-9_-]+)(?:\s+p\.(\d+))?(?:\s*·[^\]]*)?\]/g;
 
 /* 把一个匹配解析成可操作对象；无法解析的返回 null → 保持纯文本。
    现在只认 D（文档）。以后加 CAD / DWG / BOM 只需在这里加分支。 */
@@ -497,7 +514,7 @@ function renderCites(turn, citations, usedRefs) {
   if (hidden.length) {
     const more = document.createElement('span'); more.className = 'cite more tap';
     let open = false;
-    const sync = () => { more.textContent = open ? '收起' : `+${hidden.length} 处引用`; };
+    const sync = () => { more.textContent = open ? T('cites.collapse') : T('cites.more', { n: hidden.length }); };
     more.onclick = () => { open = !open; hidden.forEach(c => c.hidden = !open); sync(); };
     sync(); box.appendChild(more);
   }
@@ -534,7 +551,7 @@ function hideLogin() { $('#login').classList.remove('show'); $('#loginerr').text
 async function apiFetch(path, opts = {}) {
   const headers = Object.assign({}, opts.headers, TOKEN ? { Authorization: 'Bearer ' + TOKEN } : {});
   const r = await fetch(path, Object.assign({}, opts, { headers }));
-  if (r.status === 401) { setToken(''); showLogin('登录已过期，请重新登录'); }
+  if (r.status === 401) { setToken(''); showLogin(T('login.expired')); }
   return r;
 }
 
@@ -546,8 +563,8 @@ loginStepUser.addEventListener('submit', async e => {
   try {
     const r = await fetch('/api/auth/check-user', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username }) });
     const j = await r.json();
-    if (!r.ok) { $('#loginerr').textContent = j.error || '请求失败'; return; }
-    if (!j.exists) { $('#loginerr').textContent = '账号不存在，请联系管理员建号'; return; }
+    if (!r.ok) { $('#loginerr').textContent = j.error || T('login.requestFailed'); return; }
+    if (!j.exists) { $('#loginerr').textContent = T('login.notExist'); return; }
     if (j.needs_setup) {
       $('#whoami-setup').textContent = username;
       $('#setupcode').value = ''; $('#setuppass').value = '';
@@ -565,11 +582,11 @@ loginStepUser.addEventListener('submit', async e => {
 loginStepPass.addEventListener('submit', async e => {
   e.preventDefault();
   const username = $('#whoami-pass').textContent, password = $('#loginpass').value;
-  $('#loginerr').textContent = '登录中…';
+  $('#loginerr').textContent = T('login.loggingIn');
   try {
     const r = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) });
     const j = await r.json();
-    if (!r.ok) { $('#loginerr').textContent = j.error || '登录失败'; return; }
+    if (!r.ok) { $('#loginerr').textContent = j.error || T('login.loginFailed'); return; }
     setToken(j.token);
     await boot();
   } catch (e) { $('#loginerr').textContent = '' + e; }
@@ -578,16 +595,19 @@ loginStepPass.addEventListener('submit', async e => {
 loginStepSetup.addEventListener('submit', async e => {
   e.preventDefault();
   const username = $('#whoami-setup').textContent, setup_code = $('#setupcode').value.trim(), password = $('#setuppass').value;
-  if (password.length < 6) { $('#loginerr').textContent = '密码至少 6 位'; return; }
-  $('#loginerr').textContent = '设置中…';
+  if (password.length < 6) { $('#loginerr').textContent = T('login.passwordMinLen'); return; }
+  $('#loginerr').textContent = T('login.settingUp');
   try {
     const r = await fetch('/api/auth/setup-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, setup_code, password }) });
     const j = await r.json();
-    if (!r.ok) { $('#loginerr').textContent = j.error || '设置失败'; return; }
+    if (!r.ok) { $('#loginerr').textContent = j.error || T('login.setupFailed'); return; }
     setToken(j.token);
     await boot();
   } catch (e) { $('#loginerr').textContent = '' + e; }
 });
+
+$('#langtoggle').onclick = () => RK_I18N.setLang(RK_I18N.getLang() === 'zh' ? 'en' : 'zh');
+$('#langtoggle-login').onclick = () => RK_I18N.setLang(RK_I18N.getLang() === 'zh' ? 'en' : 'zh');
 
 $('#backfrompass').onclick = e => { e.preventDefault(); showLoginStep('user'); };
 $('#backfromsetup').onclick = e => { e.preventDefault(); showLoginStep('user'); };
@@ -628,15 +648,17 @@ function fp() {
 }
 
 async function boot() {
+  RK_I18N.applyI18n();
   if (!TOKEN) { showLogin(); return; }
   const r = await apiFetch('/api/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fingerprint: fp() }) });
-  if (!r.ok) { showLogin('会话建立失败，请重新登录'); return; }
+  if (!r.ok) { showLogin(T('login.sessionCreateFailed')); return; }
   session = await r.json();
   hideLogin();
   await loadDocs();
   const hint = document.createElement('div');
   hint.className = 'hint';
-  hint.innerHTML = '上传手册或工单后即可提问。答案只依据文档内容，并附 <code>[D&lt;文档&gt;#&lt;块&gt; p.&lt;页&gt; · 分类]</code> 引用；查不到会如实说明。答完可记录处理结果，回填知识库。';
+  hint.dataset.i18nHtml = 'chat.hintHtml';
+  hint.innerHTML = T('chat.hintHtml');
   log.appendChild(hint);
 }
 
@@ -644,15 +666,15 @@ async function loadDocs() {
   const r = await apiFetch('/api/documents');
   const j = await r.json();
   const list = $('#doclist'); list.innerHTML = '';
-  $('#doccount').textContent = j.documents.length ? j.documents.length + ' 篇' : '';
+  $('#doccount').textContent = j.documents.length ? j.documents.length + T('docs.countSuffix') : '';
   for (const d of j.documents) {
     const el = document.createElement('div');
     el.className = 'doc'; el.dataset.id = d.id;
-    const kind = d.source_kind && d.source_kind !== 'upload' ? `<span class="kind">${KIND[d.source_kind] || d.source_kind}</span>` : '';
+    const kind = d.source_kind && d.source_kind !== 'upload' ? `<span class="kind">${KIND(d.source_kind)}</span>` : '';
     el.innerHTML = `<div class="body">
         <div class="name">D${d.id} · ${esc(d.filename)}${kind}</div>
-        <div class="meta">${d.chunks} 片${d.page_count ? ' · ' + d.page_count + ' 页' : ''} · <span class="st-${d.status}">${d.status}</span></div>
-      </div><div class="del tap" title="删除">${ICON.trash}</div>`;
+        <div class="meta">${d.chunks}${T('docs.chunkSuffix')}${d.page_count ? ' · ' + d.page_count + T('docs.pageSuffix') : ''} · <span class="st-${d.status}">${d.status}</span></div>
+      </div><div class="del tap" title="${T('docs.deleteTitle')}">${ICON.trash}</div>`;
     el.querySelector('.del').onclick = () => deleteDoc(d.id);
     list.appendChild(el);
   }
@@ -669,18 +691,19 @@ function highlightDoc(id) {
 async function uploadFile(file) {
   const prog = $('#upprog');
   const fd = new FormData(); fd.append('file', file);
-  prog.textContent = '上传中 ' + file.name + ' …';
+  prog.textContent = T('docs.uploadingPrefix') + file.name + ' …';
   try {
     const r = await apiFetch('/api/upload', { method: 'POST', body: fd });
-    if (!r.ok) { const j = await r.json().catch(() => ({})); prog.textContent = '未成功 · ' + (j.error || r.status); return; }
+    if (!r.ok) { const j = await r.json().catch(() => ({})); prog.textContent = T('docs.uploadFailedPrefix') + (j.error || r.status); return; }
     await readSSE(r, ev => {
       if (ev.t === 'stage') {
-        const label = { received: '已接收', loading: '解析中', chunking: '分片中', embedding: '向量化（模型预热可能稍慢）', chunked: '分片完成', done: '已索引', skip: '已索引过（跳过）' }[ev.stage] || ev.stage;
-        prog.textContent = label + (ev.chunks ? ' · ' + ev.chunks + ' 片' : '');
+        const stageKey = 'docs.stage.' + ev.stage;
+        const label = T(stageKey) === stageKey ? ev.stage : T(stageKey);
+        prog.textContent = label + (ev.chunks ? ' · ' + ev.chunks + T('docs.chunkSuffix') : '');
         if (ev.stage === 'done' || ev.stage === 'skip') { loadDocs(); setTimeout(() => prog.textContent = '', 2500); }
-      } else if (ev.t === 'error') { prog.textContent = '未成功 · ' + ev.message; }
+      } else if (ev.t === 'error') { prog.textContent = T('docs.uploadFailedPrefix') + ev.message; }
     });
-  } catch (e) { prog.textContent = '未成功 · ' + e; }
+  } catch (e) { prog.textContent = T('docs.uploadFailedPrefix') + e; }
 }
 
 drop.onclick = () => fileInput.click();
@@ -691,27 +714,27 @@ drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) u
 
 function addFeedback(turn, question) {
   const open = document.createElement('span');
-  open.className = 'fb-open tap'; open.innerHTML = ICON.pencil + '<span>记录处理结果</span>';
+  open.className = 'fb-open tap'; open.innerHTML = ICON.pencil + `<span>${T('feedback.recordButton')}</span>`;
   turn.appendChild(open);
   open.onclick = () => {
     open.remove();
     const fb = document.createElement('div'); fb.className = 'fb';
     fb.innerHTML = `
-      <div class="row"><input class="eq" placeholder="设备 / 型号（选填）"><input class="rs" placeholder="结果（选填）"></div>
-      <input class="qq" placeholder="故障现象 / 问题" value="${esc(question)}">
-      <textarea class="rz" placeholder="实际处理 / 解决办法（必填）"></textarea>
-      <div class="actions"><button class="ghost sub" style="height:34px">入库</button><span class="msg"></span></div>`;
+      <div class="row"><input class="eq" placeholder="${T('feedback.equipmentPlaceholder')}"><input class="rs" placeholder="${T('feedback.resultPlaceholder')}"></div>
+      <input class="qq" placeholder="${T('feedback.questionPlaceholder')}" value="${esc(question)}">
+      <textarea class="rz" placeholder="${T('feedback.resolutionPlaceholder')}"></textarea>
+      <div class="actions"><button class="ghost sub" style="height:34px">${T('feedback.submit')}</button><span class="msg"></span></div>`;
     turn.appendChild(fb);
     fb.querySelector('.rz').focus();
     fb.querySelector('.sub').onclick = async () => {
       const resolution = fb.querySelector('.rz').value.trim();
       const msg = fb.querySelector('.msg');
-      if (!resolution) { msg.className = 'msg err'; msg.textContent = '请填写实际处理'; return; }
-      msg.className = 'msg'; msg.textContent = '入库中…';
+      if (!resolution) { msg.className = 'msg err'; msg.textContent = T('feedback.mustFillResolution'); return; }
+      msg.className = 'msg'; msg.textContent = T('feedback.saving');
       const r = await apiFetch('/api/feedback', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question: fb.querySelector('.qq').value, resolution, equipment: fb.querySelector('.eq').value, result: fb.querySelector('.rs').value }) });
       const j = await r.json();
-      if (r.ok) { fb.innerHTML = `<span class="done">已入库为 D${j.document_id}「${esc(j.category)}」，下次同类问题会用上。</span>`; loadDocs(); }
+      if (r.ok) { fb.innerHTML = `<span class="done">${T('feedback.savedDone', { docId: j.document_id, category: esc(j.category) })}</span>`; loadDocs(); }
       else { msg.className = 'msg err'; msg.textContent = j.error || r.status; }
     };
   };
@@ -720,7 +743,7 @@ function addFeedback(turn, question) {
 async function ask(q, image) {
   busy = true; document.body.classList.add('busy');
   const turn = document.createElement('div'); turn.className = 'turn';
-  turn.innerHTML = `<div class="q">${esc(q) || '照片提问'}</div>` + (image ? `<img class="qimg" src="${image}">` : '') + `<div class="thinking">思考中…</div>`;
+  turn.innerHTML = `<div class="q">${esc(q) || T('chat.photoQuestionFallback')}</div>` + (image ? `<img class="qimg" src="${image}">` : '') + `<div class="thinking">${T('chat.thinking')}</div>`;
   log.appendChild(turn); scrollDown();
   const thinking = turn.querySelector('.thinking');
   // 一轮问答的状态收敛在这里，避免跨事件传全局变量
@@ -797,18 +820,18 @@ function bars(items, labelKey, nKey) {
 }
 function renderDash(j) {
   const t = j.totals, q = j.queries;
-  const cards = [['文档', t.documents], ['片段', t.chunks_total], ['已索引', t.embedded],
-    ['字符数', t.chars_total], ['提问数', q.total], ['会话数', q.sessions]];
-  const bySrc = Object.entries(t.by_source_kind || {}).map(([k, n]) => ({ k: KIND[k] || k, n }));
+  const cards = [[T('dash.card.documents'), t.documents], [T('dash.card.chunks'), t.chunks_total], [T('dash.card.embedded'), t.embedded],
+    [T('dash.card.chars'), t.chars_total], [T('dash.card.queries'), q.total], [T('dash.card.sessions'), q.sessions]];
+  const bySrc = Object.entries(t.by_source_kind || {}).map(([k, n]) => ({ k: KIND(k), n }));
   const days = q.by_day || [];
   const dmax = Math.max(1, ...days.map(d => d.n));
   $('#dashbody').innerHTML = `
     <div class="cards">${cards.map(c => `<div class="card"><div class="v">${c[1]}</div><div class="k">${c[0]}</div></div>`).join('')}</div>
-    ${bySrc.length ? `<div class="sec"><h3>来源构成（含反馈回填）</h3>${bars(bySrc, 'k', 'n')}</div>` : ''}
-    ${j.categories.length ? `<div class="sec"><h3>分类分布</h3>${bars(j.categories, 'category', 'n')}</div>` : ''}
-    <div class="sec"><h3>近 14 天提问量</h3><div class="days">${days.map(d => `<div class="d" style="height:${Math.round(d.n / dmax * 100)}%" title="${d.d}: ${d.n}"></div>`).join('') || '<span class="sub" style="color:var(--fg-3)">暂无</span>'}</div></div>
-    <div class="sec"><h3>摄取历史</h3><div class="hist">${(j.ingestion || []).slice(0, 20).map(h =>
-      `<div class="h"><b>${esc(h.filename)}</b><span>${h.action}</span><span class="tnum">${h.chunks || 0} 片</span><span class="tnum">${h.ms || 0} ms</span><span class="tnum">${new Date(h.ts * 1000).toLocaleString()}</span></div>`).join('') || '<span style="color:var(--fg-3)">暂无</span>'}</div></div>`;
+    ${bySrc.length ? `<div class="sec"><h3>${T('dash.bySource')}</h3>${bars(bySrc, 'k', 'n')}</div>` : ''}
+    ${j.categories.length ? `<div class="sec"><h3>${T('dash.categoryDist')}</h3>${bars(j.categories, 'category', 'n')}</div>` : ''}
+    <div class="sec"><h3>${T('dash.days14')}</h3><div class="days">${days.map(d => `<div class="d" style="height:${Math.round(d.n / dmax * 100)}%" title="${d.d}: ${d.n}"></div>`).join('') || `<span class="sub" style="color:var(--fg-3)">${T('dash.empty')}</span>`}</div></div>
+    <div class="sec"><h3>${T('dash.ingestionHistory')}</h3><div class="hist">${(j.ingestion || []).slice(0, 20).map(h =>
+      `<div class="h"><b>${esc(h.filename)}</b><span>${h.action}</span><span class="tnum">${h.chunks || 0}${T('docs.chunkSuffix')}</span><span class="tnum">${h.ms || 0} ms</span><span class="tnum">${new Date(h.ts * 1000).toLocaleString()}</span></div>`).join('') || `<span style="color:var(--fg-3)">${T('dash.empty')}</span>`}</div></div>`;
 }
 async function openDash() {
   const r = await apiFetch('/api/stats'); const j = await r.json();
