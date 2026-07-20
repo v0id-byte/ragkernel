@@ -1,9 +1,10 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="zh" data-i18n-doc-title="meta.titleAdmin">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ragkernel · 后台管理</title>
+<script src="/static/i18n.js"></script>
 <style>
   :root {
     --bg: #f5f5f7; --surface: #ffffff; --surface-2: #fbfbfd;
@@ -36,7 +37,8 @@
 
   #login { position: fixed; inset: 0; z-index: 80; display: none; align-items: center; justify-content: center; background: var(--bg); }
   #login.show { display: flex; }
-  #login .box { width: min(360px, 88vw); background: var(--surface); border: 0.5px solid var(--line); border-radius: var(--radius-lg); padding: 28px 26px; box-shadow: 0 30px 80px rgba(0,0,0,.18); }
+  #login .box { position: relative; width: min(360px, 88vw); background: var(--surface); border: 0.5px solid var(--line); border-radius: var(--radius-lg); padding: 28px 26px; box-shadow: 0 30px 80px rgba(0,0,0,.18); }
+  #login #langtoggle-login { position: absolute; top: 16px; right: 16px; width: auto; height: 28px; padding: 0 10px; font-size: 12px; font-weight: 500; margin: 0; }
   #login h1 { font-size: 19px; font-weight: 600; letter-spacing: -0.02em; margin-bottom: 4px; }
   #login .sub { color: var(--fg-3); font-size: 13px; margin-bottom: 18px; }
 
@@ -79,70 +81,72 @@
 <div id="login">
   <div class="box">
     <h1>ragkernel</h1>
-    <div class="sub">后台管理 · 管理员登录</div>
+    <div class="sub" data-i18n="login.subAdmin">后台管理 · 管理员登录</div>
     <form id="loginstep-user">
-      <input type="text" id="loginuser" autocomplete="username" placeholder="用户名" required>
-      <button type="submit">继续</button>
+      <input type="text" id="loginuser" autocomplete="username" data-i18n-placeholder="login.usernamePlaceholder" placeholder="用户名" required>
+      <button type="submit" data-i18n="login.continue">继续</button>
     </form>
     <form id="loginstep-pass" hidden>
-      <div class="whoami">账号：<b id="whoami-pass"></b><a href="#" id="backfrompass">换一个</a></div>
-      <input type="password" id="loginpass" autocomplete="current-password" placeholder="密码" required>
-      <button type="submit">登录</button>
+      <div class="whoami"><span data-i18n="login.accountLabel">账号：</span><b id="whoami-pass"></b><a href="#" id="backfrompass" data-i18n="login.changeAccount">换一个</a></div>
+      <input type="password" id="loginpass" autocomplete="current-password" data-i18n-placeholder="login.passwordPlaceholder" placeholder="密码" required>
+      <button type="submit" data-i18n="login.loginBtn">登录</button>
     </form>
     <form id="loginstep-setup" hidden>
-      <div class="whoami">账号：<b id="whoami-setup"></b><a href="#" id="backfromsetup">换一个</a></div>
-      <div class="sub">首次登录，请输入建号口令并设置密码</div>
-      <input type="text" id="setupcode" autocomplete="off" placeholder="建号口令" required>
-      <input type="password" id="setuppass" autocomplete="new-password" placeholder="设置密码（至少 6 位）" required>
-      <button type="submit">设置密码并登录</button>
+      <div class="whoami"><span data-i18n="login.accountLabel">账号：</span><b id="whoami-setup"></b><a href="#" id="backfromsetup" data-i18n="login.changeAccount">换一个</a></div>
+      <div class="sub" data-i18n="login.setupSubAdmin">首次登录，请输入建号口令并设置密码</div>
+      <input type="text" id="setupcode" autocomplete="off" data-i18n-placeholder="login.setupCodePlaceholder" placeholder="建号口令" required>
+      <input type="password" id="setuppass" autocomplete="new-password" data-i18n-placeholder="login.setupPasswordPlaceholder" placeholder="设置密码（至少 6 位）" required>
+      <button type="submit" data-i18n="login.setupBtn">设置密码并登录</button>
     </form>
     <div id="loginerr"></div>
+    <button type="button" class="ghost tap" id="langtoggle-login" data-i18n-title="nav.langToggle">中/EN</button>
   </div>
 </div>
 <header>
-  <span class="brand">ragkernel</span><span class="sub">后台管理</span>
+  <span class="brand">ragkernel</span><span class="sub" data-i18n="admin.headerSub">后台管理</span>
   <span style="flex:1"></span>
-  <button class="ghost" id="logoutbtn">退出</button>
+  <button class="ghost" id="logoutbtn" data-i18n="nav.logout">退出</button>
+  <button class="ghost tap" id="langtoggle" data-i18n-title="nav.langToggle">中/EN</button>
 </header>
 <main id="app" style="display:none">
-  <div id="noperm" class="noperm" style="display:none">当前账号不是管理员，无权限访问。</div>
+  <div id="noperm" class="noperm" style="display:none" data-i18n="admin.noperm">当前账号不是管理员，无权限访问。</div>
   <div id="body" style="display:none">
     <div class="card">
-      <h2>AI 服务提供方</h2>
-      <div class="cardsub">配置用来生成回答的模型接口——可以填云端 API（Claude / MiniMax 等），也可以填一个已经在跑的本地推理服务地址（Ollama / vLLM，OpenAI 兼容）。改完立即生效，不用重启。</div>
+      <h2 data-i18n="admin.provider.title">AI 服务提供方</h2>
+      <div class="cardsub" data-i18n="admin.provider.sub">配置用来生成回答的模型接口——可以填云端 API（Claude / MiniMax 等），也可以填一个已经在跑的本地推理服务地址（Ollama / vLLM，OpenAI 兼容）。改完立即生效，不用重启。</div>
       <select id="provkind">
-        <option value="anthropic">Anthropic 兼容（Claude / MiniMax）</option>
-        <option value="openai">OpenAI 兼容（vLLM / Ollama / 本地服务）</option>
+        <option value="anthropic" data-i18n="admin.provider.kindAnthropic">Anthropic 兼容（Claude / MiniMax）</option>
+        <option value="openai" data-i18n="admin.provider.kindOpenai">OpenAI 兼容（vLLM / Ollama / 本地服务）</option>
       </select>
-      <input type="text" id="provbaseurl" placeholder="接口地址 base_url（本地服务示例：http://localhost:11434/v1）">
-      <input type="text" id="provmodel" placeholder="模型名称，如 MiniMax-M3 / claude-sonnet-5 / qwen2.5:14b">
+      <input type="text" id="provbaseurl" data-i18n-placeholder="admin.provider.baseUrlPlaceholder" placeholder="接口地址 base_url（本地服务示例：http://localhost:11434/v1）">
+      <input type="text" id="provmodel" data-i18n-placeholder="admin.provider.modelPlaceholder" placeholder="模型名称，如 MiniMax-M3 / claude-sonnet-5 / qwen2.5:14b">
       <div class="row">
-        <input type="password" id="provkey" autocomplete="off" placeholder="API Key（本地服务通常不需要）" style="flex:1;min-width:200px;margin-bottom:0">
-        <input type="text" id="provmaxtok" inputmode="numeric" placeholder="单次最大 token" style="width:140px;margin-bottom:0">
+        <input type="password" id="provkey" autocomplete="off" data-i18n-placeholder="admin.provider.apiKeyPlaceholder" placeholder="API Key（本地服务通常不需要）" style="flex:1;min-width:200px;margin-bottom:0">
+        <input type="text" id="provmaxtok" inputmode="numeric" data-i18n-placeholder="admin.provider.maxTokenPlaceholder" placeholder="单次最大 token" style="width:140px;margin-bottom:0">
       </div>
       <div id="provkeyhint"></div>
       <div class="row" style="margin-top:14px">
-        <button type="button" id="provtestbtn" class="ghost">测试连接</button>
-        <button type="button" id="provresetbtn" class="ghost">恢复默认</button>
-        <button type="button" id="provsavebtn">保存</button>
+        <button type="button" id="provtestbtn" class="ghost" data-i18n="admin.provider.testBtn">测试连接</button>
+        <button type="button" id="provresetbtn" class="ghost" data-i18n="admin.provider.resetBtn">恢复默认</button>
+        <button type="button" id="provsavebtn" data-i18n="admin.provider.saveBtn">保存</button>
       </div>
       <div id="provresult"></div>
     </div>
     <div class="card">
-      <h2>新建用户</h2>
+      <h2 data-i18n="admin.users.title">新建用户</h2>
       <div class="row">
-        <input type="text" id="newuser" placeholder="用户名" style="flex:1;min-width:120px;margin-bottom:0">
-        <input type="password" id="newpass" placeholder="初始密码（留空=生成建号口令）" style="flex:1;min-width:160px;margin-bottom:0">
-        <label><input type="checkbox" id="newadmin"> 管理员</label>
-        <button id="createbtn">新建</button>
+        <input type="text" id="newuser" data-i18n-placeholder="admin.users.usernamePlaceholder" placeholder="用户名" style="flex:1;min-width:120px;margin-bottom:0">
+        <input type="password" id="newpass" data-i18n-placeholder="admin.users.initialPasswordPlaceholder" placeholder="初始密码（留空=生成建号口令）" style="flex:1;min-width:160px;margin-bottom:0">
+        <label><input type="checkbox" id="newadmin"> <span data-i18n="admin.users.adminLabel">管理员</span></label>
+        <button id="createbtn" data-i18n="admin.users.createBtn">新建</button>
       </div>
       <div id="err"></div>
       <div id="newresult"></div>
     </div>
     <div class="card">
-      <h2>用户列表</h2>
+      <h2 data-i18n="admin.users.listTitle">用户列表</h2>
       <table>
-        <thead><tr><th>用户</th><th>状态</th><th>创建时间</th><th></th></tr></thead>
+        <thead><tr><th data-i18n="admin.users.colUser">用户</th><th data-i18n="admin.users.colStatus">状态</th><th data-i18n="admin.users.colCreated">创建时间</th><th></th></tr></thead>
         <tbody id="userlist"></tbody>
       </table>
     </div>
@@ -150,6 +154,7 @@
 </main>
 <script>
 const $ = s => document.querySelector(s);
+const T = RK_I18N.t;
 
 let TOKEN = localStorage.getItem('rk_token') || '';
 function setToken(t) { TOKEN = t; if (t) localStorage.setItem('rk_token', t); else localStorage.removeItem('rk_token'); }
@@ -171,7 +176,7 @@ function hideLogin() { $('#login').classList.remove('show'); $('#loginerr').text
 async function apiFetch(path, opts = {}) {
   const headers = Object.assign({}, opts.headers, TOKEN ? { Authorization: 'Bearer ' + TOKEN } : {});
   const r = await fetch(path, Object.assign({}, opts, { headers }));
-  if (r.status === 401) { setToken(''); showLogin('登录已过期，请重新登录'); }
+  if (r.status === 401) { setToken(''); showLogin(T('login.expired')); }
   return r;
 }
 
@@ -183,8 +188,8 @@ loginStepUser.addEventListener('submit', async e => {
   try {
     const r = await fetch('/api/auth/check-user', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username }) });
     const j = await r.json();
-    if (!r.ok) { $('#loginerr').textContent = j.error || '请求失败'; return; }
-    if (!j.exists) { $('#loginerr').textContent = '账号不存在，请联系管理员建号'; return; }
+    if (!r.ok) { $('#loginerr').textContent = j.error || T('login.requestFailed'); return; }
+    if (!j.exists) { $('#loginerr').textContent = T('login.notExist'); return; }
     if (j.needs_setup) {
       $('#whoami-setup').textContent = username;
       $('#setupcode').value = ''; $('#setuppass').value = '';
@@ -202,11 +207,11 @@ loginStepUser.addEventListener('submit', async e => {
 loginStepPass.addEventListener('submit', async e => {
   e.preventDefault();
   const username = $('#whoami-pass').textContent, password = $('#loginpass').value;
-  $('#loginerr').textContent = '登录中…';
+  $('#loginerr').textContent = T('login.loggingIn');
   try {
     const r = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) });
     const j = await r.json();
-    if (!r.ok) { $('#loginerr').textContent = j.error || '登录失败'; return; }
+    if (!r.ok) { $('#loginerr').textContent = j.error || T('login.loginFailed'); return; }
     setToken(j.token);
     await boot();
   } catch (e) { $('#loginerr').textContent = '' + e; }
@@ -215,16 +220,19 @@ loginStepPass.addEventListener('submit', async e => {
 loginStepSetup.addEventListener('submit', async e => {
   e.preventDefault();
   const username = $('#whoami-setup').textContent, setup_code = $('#setupcode').value.trim(), password = $('#setuppass').value;
-  if (password.length < 6) { $('#loginerr').textContent = '密码至少 6 位'; return; }
-  $('#loginerr').textContent = '设置中…';
+  if (password.length < 6) { $('#loginerr').textContent = T('login.passwordMinLen'); return; }
+  $('#loginerr').textContent = T('login.settingUp');
   try {
     const r = await fetch('/api/auth/setup-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, setup_code, password }) });
     const j = await r.json();
-    if (!r.ok) { $('#loginerr').textContent = j.error || '设置失败'; return; }
+    if (!r.ok) { $('#loginerr').textContent = j.error || T('login.setupFailed'); return; }
     setToken(j.token);
     await boot();
   } catch (e) { $('#loginerr').textContent = '' + e; }
 });
+
+$('#langtoggle').onclick = () => RK_I18N.setLang(RK_I18N.getLang() === 'zh' ? 'en' : 'zh');
+$('#langtoggle-login').onclick = () => RK_I18N.setLang(RK_I18N.getLang() === 'zh' ? 'en' : 'zh');
 
 $('#backfrompass').onclick = e => { e.preventDefault(); showLoginStep('user'); };
 $('#backfromsetup').onclick = e => { e.preventDefault(); showLoginStep('user'); };
@@ -237,12 +245,12 @@ $('#logoutbtn').onclick = async () => {
 
 function renderUsers(users) {
   $('#userlist').innerHTML = users.map(u => {
-    const tags = (u.is_admin ? '<span class="tag">管理员</span>' : '') + (!u.is_active ? '<span class="tag">已禁用</span>' : '') + (u.needs_setup ? '<span class="tag">待激活</span>' : '');
+    const tags = (u.is_admin ? `<span class="tag">${T('admin.users.tagAdmin')}</span>` : '') + (!u.is_active ? `<span class="tag">${T('admin.users.tagDisabled')}</span>` : '') + (u.needs_setup ? `<span class="tag">${T('admin.users.tagPending')}</span>` : '');
     const when = new Date(u.created_at * 1000).toLocaleString();
     const action = u.is_active
-      ? `<button class="ghost" data-act="deactivate" data-id="${u.id}">禁用</button>`
-      : `<button class="ghost" data-act="activate" data-id="${u.id}">启用</button>`;
-    const status = !u.is_active ? '已禁用' : (u.needs_setup ? '待激活' : '正常');
+      ? `<button class="ghost" data-act="deactivate" data-id="${u.id}">${T('admin.users.deactivate')}</button>`
+      : `<button class="ghost" data-act="activate" data-id="${u.id}">${T('admin.users.activate')}</button>`;
+    const status = !u.is_active ? T('admin.users.tagDisabled') : (u.needs_setup ? T('admin.users.tagPending') : T('admin.users.statusActive'));
     return `<tr><td>${u.username}${tags}</td><td>${status}</td><td>${when}</td><td>${action}</td></tr>`;
   }).join('');
   document.querySelectorAll('#userlist button').forEach(btn => {
@@ -253,26 +261,29 @@ function renderUsers(users) {
   });
 }
 
+let lastUsers = null;
 async function loadUsers() {
   const r = await apiFetch('/admin/api/users');
   if (!r.ok) return;
   const j = await r.json();
+  lastUsers = j.users;
   renderUsers(j.users);
 }
+RK_I18N.onChange(() => { if (lastUsers) renderUsers(lastUsers); });
 
 $('#createbtn').onclick = async () => {
   const username = $('#newuser').value.trim(), password = $('#newpass').value;
   const is_admin = $('#newadmin').checked;
-  if (!username) { $('#err').textContent = '用户名不能为空'; return; }
+  if (!username) { $('#err').textContent = T('admin.users.usernameRequired'); return; }
   $('#err').textContent = ''; $('#newresult').textContent = '';
   const r = await apiFetch('/admin/api/users', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password, is_admin }),
   });
   const j = await r.json();
-  if (!r.ok) { $('#err').textContent = j.error || '新建失败'; return; }
+  if (!r.ok) { $('#err').textContent = j.error || T('admin.users.createFailed'); return; }
   $('#newuser').value = ''; $('#newpass').value = ''; $('#newadmin').checked = false;
-  if (j.setup_code) { $('#newresult').textContent = `已建待激活账号 ${j.username}，建号口令：${j.setup_code}（交给本人，只显示这一次）`; }
+  if (j.setup_code) { $('#newresult').textContent = T('admin.users.createdResult', { username: j.username, setupCode: j.setup_code }); }
   loadUsers();
 };
 
@@ -288,8 +299,8 @@ function providerFormValues() {
 
 function renderProviderKeyHint(p) {
   $('#provkeyhint').textContent = p.api_key_set
-    ? `当前已配置 API Key（${p.api_key_hint}）。这里留空保存 = 不修改它。`
-    : '尚未配置 API Key（本地服务通常不需要）。';
+    ? T('admin.provider.keyHintSet', { hint: p.api_key_hint })
+    : T('admin.provider.keyHintUnset');
 }
 
 async function loadProvider() {
@@ -305,47 +316,48 @@ async function loadProvider() {
 }
 
 $('#provsavebtn').onclick = async () => {
-  $('#provresult').className = ''; $('#provresult').textContent = '保存中…';
+  $('#provresult').className = ''; $('#provresult').textContent = T('admin.provider.saving');
   const r = await apiFetch('/admin/api/provider', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(providerFormValues()),
   });
   const j = await r.json();
-  if (!r.ok) { $('#provresult').className = 'err'; $('#provresult').textContent = j.error || '保存失败'; return; }
-  $('#provresult').className = 'ok'; $('#provresult').textContent = '已保存，立即生效。';
+  if (!r.ok) { $('#provresult').className = 'err'; $('#provresult').textContent = j.error || T('admin.provider.saveFailed'); return; }
+  $('#provresult').className = 'ok'; $('#provresult').textContent = T('admin.provider.saved');
   $('#provkey').value = '';
   renderProviderKeyHint(j);
 };
 
 $('#provtestbtn').onclick = async () => {
-  $('#provresult').className = ''; $('#provresult').textContent = '测试中…';
+  $('#provresult').className = ''; $('#provresult').textContent = T('admin.provider.testing');
   const r = await apiFetch('/admin/api/provider/test', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(providerFormValues()),
   });
   const j = await r.json();
-  if (!r.ok || !j.ok) { $('#provresult').className = 'err'; $('#provresult').textContent = '连接失败：' + (j.error || r.status); return; }
-  $('#provresult').className = 'ok'; $('#provresult').textContent = '连接成功，模型回复：' + (j.reply || '（空）');
+  if (!r.ok || !j.ok) { $('#provresult').className = 'err'; $('#provresult').textContent = T('admin.provider.testFailedPrefix') + (j.error || r.status); return; }
+  $('#provresult').className = 'ok'; $('#provresult').textContent = T('admin.provider.testSuccessPrefix') + (j.reply || T('admin.provider.testEmptyReply'));
 };
 
 $('#provresetbtn').onclick = async () => {
-  $('#provresult').className = ''; $('#provresult').textContent = '恢复中…';
+  $('#provresult').className = ''; $('#provresult').textContent = T('admin.provider.resetting');
   const r = await apiFetch('/admin/api/provider/reset', { method: 'POST' });
   const j = await r.json();
-  if (!r.ok) { $('#provresult').className = 'err'; $('#provresult').textContent = j.error || '恢复失败'; return; }
+  if (!r.ok) { $('#provresult').className = 'err'; $('#provresult').textContent = j.error || T('admin.provider.resetFailed'); return; }
   $('#provkind').value = j.kind; $('#provbaseurl').value = j.base_url || ''; $('#provmodel').value = j.model || '';
   $('#provmaxtok').value = j.max_tokens || 8000; $('#provkey').value = '';
   renderProviderKeyHint(j);
-  $('#provresult').className = 'ok'; $('#provresult').textContent = '已恢复为 config/settings.yaml + .env 的默认值。';
+  $('#provresult').className = 'ok'; $('#provresult').textContent = T('admin.provider.resetDone');
 };
 
 async function boot() {
+  RK_I18N.applyI18n();
   if (!TOKEN) { showLogin(); return; }
   hideLogin();
   $('#app').style.display = 'block';
   const r = await apiFetch('/admin/api/users');
   if (r.status === 403) { $('#noperm').style.display = 'block'; $('#body').style.display = 'none'; return; }
-  if (!r.ok) { showLogin('会话已失效，请重新登录'); return; }
+  if (!r.ok) { showLogin(T('login.sessionExpiredAdmin')); return; }
   $('#noperm').style.display = 'none'; $('#body').style.display = 'block';
   const j = await r.json();
   renderUsers(j.users);
