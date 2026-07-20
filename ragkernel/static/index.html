@@ -147,8 +147,6 @@
   .thinking.err { color: var(--danger); }
   .qimg { max-height: 200px; border-radius: 12px; border: 0.5px solid var(--line); margin: 8px 0; display: block; }
   .imgnote { color: var(--fg-3); font-size: 13px; margin: 6px 0 10px; }
-  #resumewarn { max-width: 780px; margin: 0 auto 10px; padding: 9px 13px; border-radius: var(--radius); background: var(--fill); border: 0.5px solid var(--line); color: var(--fg-2); font-size: 13.5px; display: flex; align-items: center; gap: 10px; }
-  #resumewarn button { flex-shrink: 0; }
   .hint { color: var(--fg-3); max-width: 780px; margin: 0 auto; font-size: 14px; }
   .hint code { font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 12.5px; background: var(--fill); padding: 1px 6px; border-radius: 6px; }
 
@@ -757,18 +755,6 @@ async function deleteConv(c) {
   await loadConvs();
 }
 
-function setResumable(ok) {
-  const old = $('#resumewarn'); if (old) old.remove();
-  if (ok) return;
-  // 只提示，不禁用输入框 —— 水合失败多半是 provider 临时抽风，不该让整个界面半死
-  const w = document.createElement('div'); w.id = 'resumewarn';
-  w.innerHTML = `<span>${T('convs.notResumable')}</span>`;
-  const b = document.createElement('button'); b.className = 'ghost'; b.textContent = T('convs.new');
-  b.onclick = () => newConv();
-  w.appendChild(b);
-  $('#bar').insertBefore(w, $('#bar').firstChild);
-}
-
 async function openConv(id) {
   const r = await apiFetch('/api/conversations/' + id);
   // 404 多半是别的标签页把它删了 —— 顺手刷新列表，否则这条死记录会一直躺在侧栏
@@ -778,7 +764,6 @@ async function openConv(id) {
   localStorage.setItem('rk_conv', conv.id);
   log.innerHTML = '';
   for (const t of conv.turns) renderTurn(t);
-  setResumable(conv.resumable);
   scrollDown();
   renderConvs(lastConvs);
   closeDocs();
@@ -790,7 +775,6 @@ async function newConv() {
   if (!r.ok) { showLogin(T('login.sessionCreateFailed')); return false; }
   session = await r.json();
   localStorage.setItem('rk_conv', session.session_id);
-  setResumable(true);
   showHint();
   renderConvs(lastConvs);
   closeDocs();

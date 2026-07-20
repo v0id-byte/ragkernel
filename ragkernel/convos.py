@@ -26,6 +26,8 @@ CREATE INDEX IF NOT EXISTS idx_msg_conv ON messages(conv_id, id);
 """
 
 TITLE_MAX = 60
+# 纯图片提问的 question 是空串（图片不入库）。重建历史时拿它占位，保住 user/assistant 交替。
+PHOTO_QUESTION = "（看图提问）"
 
 
 def connect() -> sqlite3.Connection:
@@ -37,23 +39,31 @@ def connect() -> sqlite3.Connection:
 
 def append_turn(conv_id: str, user_id: int, question: str, answer: str,
                 citations: list | None = None, model: str = "",
-                has_image: bool = False, latency_ms: int | None = None) -> None:
+                has_image: bool = False, latency_ms: int | None = None) -> bool:
     """记一轮问答。会话行不存在则建（标题取首个问题），存在则只刷新预览/时间/计数。
 
     整体一个事务：conversations.turns 与 messages 行数必须同生同死，
     否则列表里的轮数会永久对不上实际条数。
+
+    会话已被软删则整轮丢弃（返回 False）。用户删掉当前会话时，它的 /api/ask worker 可能
+    还在跑——线程停不下来，只能在写入这一侧挡：否则这轮会挂在一个 deleted=1 的会话下，
+    列表和详情都看不到（两处都过滤 deleted=0），却实实在在留在库里，与「删除」的承诺相悖，
+    连带把死会话的 turns 越刷越大。
     """
     now = int(time.time())
     title = (question or "").strip()[:TITLE_MAX]
     db = connect()
     with db:
-        db.execute(
+        cur = db.execute(
             "INSERT INTO conversations(id, user_id, title, last_question, created_at, updated_at, turns) "
             "VALUES(?,?,?,?,?,?,1) "
             "ON CONFLICT(id) DO UPDATE SET last_question=excluded.last_question, "
-            "  updated_at=excluded.updated_at, turns=turns+1",  # 有意不含 title：标题只在建行时定一次
+            "  updated_at=excluded.updated_at, turns=turns+1 "  # 有意不含 title：标题只在建行时定一次
+            "  WHERE conversations.deleted=0",
             (conv_id, user_id, title, title, now, now),
         )
+        if not cur.rowcount:  # 冲突且 WHERE 不成立 = 会话已删，消息也不能落
+            return False
         db.execute(
             "INSERT INTO messages(conv_id, ts, question, answer, citations_json, model, has_image, latency_ms) "
             "VALUES(?,?,?,?,?,?,?,?)",
@@ -61,6 +71,7 @@ def append_turn(conv_id: str, user_id: int, question: str, answer: str,
              json.dumps(citations or [], ensure_ascii=False, default=str),
              model or None, 1 if has_image else 0, latency_ms),
         )
+    return True
 
 
 def get_conv(conv_id: str, user_id: int) -> dict | None:
@@ -99,13 +110,24 @@ def build_history(turns: list[dict], max_messages: int = 20) -> list[dict]:
 
     只保留对话线索，丢掉工具调用细节 —— 模型需要的是「上次聊到哪」，不是重看一遍检索过程。
     这个形状 Anthropic / OpenAI 两种方言都认，所以中途换 provider 也不会炸。
+
+    **必须严格 user/assistant 交替、且以 user 开头**：逐条判断"有就加"会在两种情况下塌掉
+    —— 纯图片提问库里存的 question 是空串（图片本身不入库），只加 assistant 就让历史以
+    assistant 开头或出现相邻 assistant；答案为空的失败轮次则会连出两条 user。严格的
+    Anthropic 兼容后端对这两种都直接报错。所以这里按「轮」而非按「条」来放。
     """
     history: list[dict] = []
     for m in turns[-(max_messages // 2):]:
-        if m.get("question"):
-            history.append({"role": "user", "content": m["question"]})
-        if m.get("answer"):
-            history.append({"role": "assistant", "content": m["answer"]})
+        answer = (m.get("answer") or "").strip()
+        if not answer:
+            continue  # 没答出来的轮次整轮丢弃，留下孤立的 user 只会打断交替
+        question = (m.get("question") or "").strip()
+        if not question:
+            if not m.get("has_image"):
+                continue  # 既无问题也无图片，这轮没有任何 user 内容可还原
+            question = PHOTO_QUESTION  # 保住轮次结构，也保住"这轮是看图问的"这点上下文
+        history.append({"role": "user", "content": question})
+        history.append({"role": "assistant", "content": answer})
     return history
 
 
