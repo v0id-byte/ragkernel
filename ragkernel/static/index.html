@@ -751,8 +751,10 @@ async function deleteConv(c) {
   if (!confirm(T('convs.confirmDelete', { title: c.title || T('convs.untitled') }))) return;
   const r = await apiFetch('/api/conversations/' + c.id, { method: 'DELETE' });
   if (!r.ok) return;
+  // 删的是当前会话时先顶上一个新会话，再统一refetch —— newConv() 里的 renderConvs
+  // 用的是还带着这条已删记录的 lastConvs，不重新拉取的话侧栏会留下一行点了就 404 的死记录
   if (session && session.session_id === c.id) await newConv();
-  else loadConvs();
+  await loadConvs();
 }
 
 function setResumable(ok) {
@@ -769,7 +771,8 @@ function setResumable(ok) {
 
 async function openConv(id) {
   const r = await apiFetch('/api/conversations/' + id);
-  if (!r.ok) { localStorage.removeItem('rk_conv'); return false; }
+  // 404 多半是别的标签页把它删了 —— 顺手刷新列表，否则这条死记录会一直躺在侧栏
+  if (!r.ok) { localStorage.removeItem('rk_conv'); loadConvs(); return false; }
   const conv = await r.json();
   session = { session_id: conv.id };
   localStorage.setItem('rk_conv', conv.id);

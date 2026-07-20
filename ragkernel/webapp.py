@@ -17,6 +17,9 @@ app = Flask(__name__)
 # 这里丢了不等于对话丢了 —— resolve_session() 会从 messages 重建。
 _sessions: dict[str, dict] = {}
 _lock = threading.Lock()
+# 每个 sid 一把冷启动水合锁：_lock 只护 dict 存取（不做 IO），水合本身可能读库、
+# 建连接、写审计，不能压在全局锁里。
+_hydrating: dict[str, threading.Lock] = {}
 STATIC = Path(__file__).parent / "static"
 
 
@@ -192,10 +195,25 @@ def resolve_session(sid: str) -> dict | None:
         s = _sessions.get(sid)
     if s:
         return s if s["user_id"] == uid else None
-    conv = convos.get_conv(sid, uid)  # 已按 user_id 收口，别人的会话在这里就是不存在
-    if not conv:
-        return None
-    return _hydrate(sid, uid, convos.build_history(conv["turns"]), ip=_client_ip())
+
+    # 冷启动：同一 sid 只许一个线程水合。否则两个请求（比如重启后两个标签页同时提问）
+    # 会各建一套 Toolbox/Audit 和各自的 busy 锁，两个 /api/ask 就能并发改同一段历史。
+    # 必须在构造前收口 —— Audit 一构造就写一条 sessions 记录，事后丢弃会留下幽灵记录。
+    with _lock:
+        lk = _hydrating.setdefault(sid, threading.Lock())
+    try:
+        with lk:
+            with _lock:
+                s = _sessions.get(sid)
+            if s:
+                return s if s["user_id"] == uid else None
+            conv = convos.get_conv(sid, uid)  # 已按 user_id 收口，别人的会话在这里就是不存在
+            if not conv:
+                return None
+            return _hydrate(sid, uid, convos.build_history(conv["turns"]), ip=_client_ip())
+    finally:
+        with _lock:
+            _hydrating.pop(sid, None)
 
 
 def _sse(gen):
