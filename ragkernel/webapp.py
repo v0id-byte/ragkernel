@@ -468,12 +468,12 @@ def conversation(cid: str):
     conv = convos.get_conv(cid, g.user["id"])
     if not conv:
         return jsonify({"error": "会话不存在"}), 404
-    # 水合失败不该挡住回放：看历史 ≠ 继续聊，provider 临时抽风时正文仍要看得到。
-    try:
-        resumable = resolve_session(cid) is not None
-    except Exception:
-        resumable = False
-    return jsonify({**conv, "resumable": resumable})
+    # 这里**绝不能**调 resolve_session：它 miss 时会走 _hydrate，而 _hydrate 一构造
+    # audit.Audit 就 INSERT 一条 sessions 记录——于是「翻一眼历史」也被记成一次新会话，
+    # 把仪表盘的会话数刷虚（query_stats 直接 COUNT(*) sessions）。
+    # get_conv 已按 user_id 收口且返回了正文，会话就一定能续聊：水合是惰性的，
+    # 真正建 Toolbox/Audit 推迟到 /api/ask（那里 resolve_session 会按需水合）。
+    return jsonify({**conv, "resumable": True})
 
 
 @app.patch("/api/conversations/<cid>")
