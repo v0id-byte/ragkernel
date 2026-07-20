@@ -55,11 +55,40 @@
 
   #main { flex: 1; display: flex; min-height: 0; }
 
-  /* 侧栏：文档 */
+  /* 侧栏：历史会话 + 文档 */
   #docs { width: 300px; flex-shrink: 0; background: var(--surface-2); border-right: 0.5px solid var(--line-soft); display: flex; flex-direction: column; }
   #docs .hd { padding: 16px 18px 10px; display: flex; align-items: baseline; justify-content: space-between; }
   #docs .hd span { font-weight: 600; letter-spacing: -0.01em; }
   #docs .hd .sub { color: var(--fg-3); font-size: 12.5px; font-weight: 400; }
+  /* 会话少时按内容收缩、多了封顶 45% 内部滚动。
+     flex-shrink 必须是 0：否则下面那截长文档列表会把整个会话区挤扁。 */
+  #convsec { flex: 0 0 auto; max-height: 45%; display: flex; flex-direction: column; min-height: 0; border-bottom: 0.5px solid var(--line-soft); }
+  #docsec { flex: 1 1 0; display: flex; flex-direction: column; min-height: 0; }
+  #convsec .hd { align-items: center; }
+  #newconv { color: var(--fg-2); cursor: pointer; padding: 4px; border-radius: 8px; display: flex; transition: background 140ms ease, color 140ms ease; }
+  #newconv:hover { background: var(--fill); color: var(--fg); }
+  #newconv:active { transform: scale(.96); }
+  #newconv svg { width: 16px; height: 16px; }
+  #convsearch {
+    margin: 0 14px 8px; padding: 7px 11px; background: var(--surface); border: 0.5px solid var(--line);
+    border-radius: 10px; color: var(--fg); font: inherit; font-size: 13px; outline: none;
+    transition: border-color 140ms ease;
+  }
+  #convsearch:focus { border-color: var(--focus); }
+  /* flex-basis 必须是 auto：父容器高度靠内容撑，用 flex:1（basis 0）会整列塌成 0 高 */
+  #convlist { flex: 0 1 auto; overflow-y: auto; padding: 0 10px 12px; }
+  .conv { padding: 9px 12px; border-radius: 12px; display: flex; gap: 8px; align-items: center; cursor: pointer; transition: background 140ms ease; }
+  .conv:hover { background: var(--fill); }
+  .conv.active { background: color-mix(in srgb, var(--focus) 12%, transparent); }
+  .conv .body { flex: 1; min-width: 0; }
+  .conv .name { font-weight: 500; font-size: 13.5px; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .conv .meta { color: var(--fg-3); font-size: 12px; margin-top: 2px; }
+  .conv .act { color: var(--fg-3); cursor: pointer; padding: 3px; border-radius: 8px; opacity: 0; flex-shrink: 0; transition: opacity 140ms ease, color 140ms ease, background 140ms ease; }
+  .conv:hover .act { opacity: 1; }
+  .conv .act:hover { background: var(--surface); color: var(--fg); }
+  .conv .act.del:hover { color: var(--danger); }
+  .conv .act svg { width: 14px; height: 14px; display: block; }
+  .sidenote { padding: 6px 22px 14px; color: var(--fg-3); font-size: 12.5px; }
   #drop {
     margin: 4px 14px 12px; padding: 22px 14px; border: 1px dashed var(--line); border-radius: var(--radius);
     text-align: center; color: var(--fg-3); cursor: pointer; font-size: 13px; line-height: 1.5;
@@ -117,6 +146,9 @@
   .thinking { color: var(--fg-3); }
   .thinking.err { color: var(--danger); }
   .qimg { max-height: 200px; border-radius: 12px; border: 0.5px solid var(--line); margin: 8px 0; display: block; }
+  .imgnote { color: var(--fg-3); font-size: 13px; margin: 6px 0 10px; }
+  #resumewarn { max-width: 780px; margin: 0 auto 10px; padding: 9px 13px; border-radius: var(--radius); background: var(--fill); border: 0.5px solid var(--line); color: var(--fg-2); font-size: 13.5px; display: flex; align-items: center; gap: 10px; }
+  #resumewarn button { flex-shrink: 0; }
   .hint { color: var(--fg-3); max-width: 780px; margin: 0 auto; font-size: 14px; }
   .hint code { font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 12.5px; background: var(--fill); padding: 1px 6px; border-radius: 6px; }
 
@@ -335,11 +367,21 @@
 <div id="main">
   <div id="docs-scrim"></div>
   <aside id="docs">
-    <div class="hd"><span data-i18n="docs.title">文档</span><span class="sub" id="doccount"></span></div>
-    <div id="drop"><span data-i18n="docs.dropText">拖拽文件到此，或点击选择</span><br><span class="sub" data-i18n="docs.dropSub">PDF · Word · PPT · Markdown · CSV/Excel 工单，自动索引</span></div>
-    <input type="file" id="file" hidden>
-    <div id="upprog"></div>
-    <div id="doclist"></div>
+    <section id="convsec">
+      <div class="hd">
+        <span data-i18n="convs.title">历史会话</span>
+        <span id="newconv" data-i18n-title="convs.new" title="新对话"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span>
+      </div>
+      <input id="convsearch" autocomplete="off" spellcheck="false" data-i18n-placeholder="convs.searchPlaceholder" placeholder="搜索历史……">
+      <div id="convlist"></div>
+    </section>
+    <section id="docsec">
+      <div class="hd"><span data-i18n="docs.title">文档</span><span class="sub" id="doccount"></span></div>
+      <div id="drop"><span data-i18n="docs.dropText">拖拽文件到此，或点击选择</span><br><span class="sub" data-i18n="docs.dropSub">PDF · Word · PPT · Markdown · CSV/Excel 工单，自动索引</span></div>
+      <input type="file" id="file" hidden>
+      <div id="upprog"></div>
+      <div id="doclist"></div>
+    </section>
   </aside>
   <section id="chat">
     <div id="log"></div>
@@ -615,7 +657,10 @@ $('#backfromsetup').onclick = e => { e.preventDefault(); showLoginStep('user'); 
 $('#logoutbtn').onclick = async () => {
   try { await apiFetch('/api/auth/logout', { method: 'POST' }); } catch (e) {}
   setToken('');
+  localStorage.removeItem('rk_conv');  // 换个人登录不该看到上一位的历史
   log.innerHTML = '';
+  $('#convlist').innerHTML = '';
+  session = null; lastConvs = [];
   showLogin();
 };
 
@@ -647,19 +692,133 @@ function fp() {
   return h.toString(16).padStart(8, '0');
 }
 
-async function boot() {
-  RK_I18N.applyI18n();
-  if (!TOKEN) { showLogin(); return; }
+/* ── 历史会话 ─────────────────────────────────────────────────
+   对话持久化在后端；session_id 同时就是 conversation id，
+   所以「打开一条历史」和「继续聊」是同一个 id，不需要第二套映射。 */
+let lastConvs = [];
+
+function relTime(ts) {
+  const s = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+  if (s < 60) return T('convs.time.now');
+  if (s < 3600) return T('convs.time.min', { n: Math.floor(s / 60) });
+  if (s < 86400) return T('convs.time.hour', { n: Math.floor(s / 3600) });
+  if (s < 86400 * 7) return T('convs.time.day', { n: Math.floor(s / 86400) });
+  const d = new Date(ts * 1000);
+  return T('convs.time.date', { m: d.getMonth() + 1, d: d.getDate() });
+}
+
+async function loadConvs(q) {
+  const query = q === undefined ? $('#convsearch').value.trim() : q;
+  const r = await apiFetch('/api/conversations' + (query ? '?q=' + encodeURIComponent(query) : ''));
+  if (!r.ok) return;
+  lastConvs = (await r.json()).conversations;
+  renderConvs(lastConvs);
+}
+
+function renderConvs(rows) {
+  const list = $('#convlist'); list.innerHTML = '';
+  if (!rows.length) {
+    const empty = document.createElement('div'); empty.className = 'sidenote';
+    empty.textContent = $('#convsearch').value.trim() ? T('convs.noResult') : T('convs.empty');
+    list.appendChild(empty); return;
+  }
+  for (const c of rows) {
+    const el = document.createElement('div');
+    el.className = 'conv' + (session && session.session_id === c.id ? ' active' : '');
+    el.innerHTML = `<div class="body">
+        <div class="name">${esc(c.title) || T('convs.untitled')}</div>
+        <div class="meta">${relTime(c.updated_at)} · ${c.turns}${T('convs.turnSuffix')}</div>
+      </div>
+      <span class="act ren" title="${T('convs.rename')}">${ICON.pencil}</span>
+      <span class="act del" title="${T('convs.delete')}">${ICON.trash}</span>`;
+    el.onclick = () => openConv(c.id);
+    el.querySelector('.ren').onclick = e => { e.stopPropagation(); renameConv(c); };
+    el.querySelector('.del').onclick = e => { e.stopPropagation(); deleteConv(c); };
+    list.appendChild(el);
+  }
+}
+
+async function renameConv(c) {
+  const title = prompt(T('convs.rename'), c.title || '');
+  if (title === null || !title.trim()) return;
+  const r = await apiFetch('/api/conversations/' + c.id, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title })
+  });
+  if (r.ok) loadConvs();
+}
+
+async function deleteConv(c) {
+  if (!confirm(T('convs.confirmDelete', { title: c.title || T('convs.untitled') }))) return;
+  const r = await apiFetch('/api/conversations/' + c.id, { method: 'DELETE' });
+  if (!r.ok) return;
+  if (session && session.session_id === c.id) await newConv();
+  else loadConvs();
+}
+
+function setResumable(ok) {
+  const old = $('#resumewarn'); if (old) old.remove();
+  if (ok) return;
+  // 只提示，不禁用输入框 —— 水合失败多半是 provider 临时抽风，不该让整个界面半死
+  const w = document.createElement('div'); w.id = 'resumewarn';
+  w.innerHTML = `<span>${T('convs.notResumable')}</span>`;
+  const b = document.createElement('button'); b.className = 'ghost'; b.textContent = T('convs.new');
+  b.onclick = () => newConv();
+  w.appendChild(b);
+  $('#bar').insertBefore(w, $('#bar').firstChild);
+}
+
+async function openConv(id) {
+  const r = await apiFetch('/api/conversations/' + id);
+  if (!r.ok) { localStorage.removeItem('rk_conv'); return false; }
+  const conv = await r.json();
+  session = { session_id: conv.id };
+  localStorage.setItem('rk_conv', conv.id);
+  log.innerHTML = '';
+  for (const t of conv.turns) renderTurn(t);
+  setResumable(conv.resumable);
+  scrollDown();
+  renderConvs(lastConvs);
+  closeDocs();
+  return true;
+}
+
+async function newConv() {
   const r = await apiFetch('/api/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fingerprint: fp() }) });
-  if (!r.ok) { showLogin(T('login.sessionCreateFailed')); return; }
+  if (!r.ok) { showLogin(T('login.sessionCreateFailed')); return false; }
   session = await r.json();
-  hideLogin();
-  await loadDocs();
+  localStorage.setItem('rk_conv', session.session_id);
+  setResumable(true);
+  showHint();
+  renderConvs(lastConvs);
+  closeDocs();
+  return true;
+}
+
+function showHint() {
+  log.innerHTML = '';
   const hint = document.createElement('div');
   hint.className = 'hint';
   hint.dataset.i18nHtml = 'chat.hintHtml';
   hint.innerHTML = T('chat.hintHtml');
   log.appendChild(hint);
+}
+
+$('#newconv').onclick = () => newConv();
+let convSearchTimer = null;
+$('#convsearch').oninput = () => { clearTimeout(convSearchTimer); convSearchTimer = setTimeout(() => loadConvs(), 250); };
+// 列表是 JS 拼的，applyI18n 够不着，切语言必须自己重画
+RK_I18N.onChange(() => renderConvs(lastConvs));
+
+async function boot() {
+  RK_I18N.applyI18n();
+  if (!TOKEN) { showLogin(); return; }
+  hideLogin();
+  await Promise.all([loadDocs(), loadConvs()]);
+  // 刷新/换设备都不该丢会话：本地记的 → 服务端最近一条 → 都没有才开新的
+  const saved = localStorage.getItem('rk_conv');
+  if (saved && await openConv(saved)) return;
+  if (lastConvs.length && await openConv(lastConvs[0].id)) return;
+  await newConv();
 }
 
 async function loadDocs() {
@@ -740,14 +899,48 @@ function addFeedback(turn, question) {
   };
 }
 
+/* ── 一轮问答的 DOM ───────────────────────────────────────────
+   实时问答与历史回放共用这两个函数。分开写过一次就会漂移：
+   引用点击、悬浮预览、反馈入口在历史里也必须一模一样。 */
+function newTurnEl(q, image, hasImage) {
+  const turn = document.createElement('div'); turn.className = 'turn';
+  turn.innerHTML = `<div class="q">${esc(q) || T('chat.photoQuestionFallback')}</div>`
+    + (image ? `<img class="qimg" src="${image}">` : '')
+    + (!image && hasImage ? `<div class="imgnote">${T('convs.imageNotStored')}</div>` : '');
+  return turn;
+}
+
+function renderAnswer(turn, text) {
+  const a = document.createElement('div'); a.className = 'a md';
+  renderMarkdown(a, text); turn.appendChild(a);
+  return a;
+}
+
+// 引用要等 citations 齐了才能解析行内标记，所以和答案渲染分成两步
+function applyCites(turn, answerEl, q, citations) {
+  const cites = citations || [], citeMap = new Map(), usedRefs = new Set();
+  for (const c of cites) citeMap.set(c.ref, c);
+  if (answerEl) linkifyCites(answerEl, citeMap, usedRefs);
+  if (cites.length) renderCites(turn, cites, usedRefs);
+  addFeedback(turn, q);
+}
+
+function renderTurn(t) {
+  const turn = newTurnEl(t.question, null, t.has_image);
+  const a = renderAnswer(turn, t.answer);
+  applyCites(turn, a, t.question, t.citations);
+  log.appendChild(turn);
+  return turn;
+}
+
 async function ask(q, image) {
   busy = true; document.body.classList.add('busy');
-  const turn = document.createElement('div'); turn.className = 'turn';
-  turn.innerHTML = `<div class="q">${esc(q) || T('chat.photoQuestionFallback')}</div>` + (image ? `<img class="qimg" src="${image}">` : '') + `<div class="thinking">${T('chat.thinking')}</div>`;
+  const turn = newTurnEl(q, image, false);
+  turn.insertAdjacentHTML('beforeend', `<div class="thinking">${T('chat.thinking')}</div>`);
   log.appendChild(turn); scrollDown();
   const thinking = turn.querySelector('.thinking');
   // 一轮问答的状态收敛在这里，避免跨事件传全局变量
-  const turnState = { answerEl: null, citeMap: new Map(), usedRefs: new Set() };
+  const turnState = { answerEl: null };
   try {
     const r = await apiFetch('/api/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session_id: session.session_id, question: q, image: image || undefined }) });
     if (!r.ok) { const j = await r.json().catch(() => ({})); thinking.className = 'thinking err'; thinking.textContent = j.error || r.status; return; }
@@ -759,16 +952,11 @@ async function ask(q, image) {
         turn.insertBefore(t, thinking);
       } else if (ev.t === 'answer') {
         thinking.remove();
-        const a = document.createElement('div'); a.className = 'a md';
-        renderMarkdown(a, ev.text); turn.appendChild(a);
-        turnState.answerEl = a;
+        turnState.answerEl = renderAnswer(turn, ev.text);
       } else if (ev.t === 'done') {
         // citations 随 done 到达，晚于 answer —— 所以行内引用在这里才能解析
-        const cites = ev.citations || [];
-        for (const c of cites) turnState.citeMap.set(c.ref, c);
-        if (turnState.answerEl) linkifyCites(turnState.answerEl, turnState.citeMap, turnState.usedRefs);
-        if (cites.length) renderCites(turn, cites, turnState.usedRefs);
-        addFeedback(turn, q);
+        applyCites(turn, turnState.answerEl, q, ev.citations);
+        loadConvs();  // 首轮会生成标题，排序也会变
       } else if (ev.t === 'error') { thinking.className = 'thinking err'; thinking.textContent = ev.message; }
       scrollDown();
     });
