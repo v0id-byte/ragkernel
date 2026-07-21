@@ -57,6 +57,25 @@ def get_provider_override() -> dict:
     return dict(row) if row else {}
 
 
+def get_provider_override_ro() -> dict:
+    """只读版：库不存在就返回空、**绝不创建**（`_settings_db`/`data_dir` 会 mkdir + 建表）。
+    供 doctor 等必须零副作用的场景——诊断系统不该改变被诊断的系统。"""
+    override = os.environ.get("RAGKERNEL_DATA_DIR")
+    d = Path(override) if override else ROOT / settings().get("data_dir", "data")
+    p = d / "settings.db"
+    if not p.exists():
+        return {}
+    db = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
+    db.row_factory = sqlite3.Row
+    try:
+        row = db.execute("SELECT * FROM provider_override WHERE id=1").fetchone()
+        return dict(row) if row else {}
+    except sqlite3.OperationalError:  # 库在但表还没建
+        return {}
+    finally:
+        db.close()
+
+
 def set_provider_override(kind: str, base_url: str, model: str, max_tokens: int, api_key: str | None):
     """api_key=None（表单留空）= 不改已存的密钥，只更新其余字段。"""
     db = _settings_db()
@@ -77,18 +96,20 @@ def clear_provider_override():
     db.commit()
 
 
-def provider() -> dict:
+def provider(readonly: bool = False) -> dict:
     """LLM provider 配置：{base_url, model, api_key_env, max_tokens[, api_key]}。
 
     先取 config/settings.yaml 的默认值，再叠加后台设置页存的运行时覆盖（若有）。
     override 里的 api_key 是明文密钥（不是 api_key_env 那层间接），backends.py 里优先用它。
+
+    readonly=True：读覆盖时绝不创建 settings.db（供 doctor 等零副作用场景）。
     """
     prov = dict(settings().get("provider") or {})
     prov.setdefault("kind", "anthropic")  # anthropic | openai
     prov.setdefault("model", "claude-sonnet-5")
     prov.setdefault("api_key_env", "ANTHROPIC_API_KEY")
     prov.setdefault("max_tokens", 8000)
-    override = get_provider_override()
+    override = get_provider_override_ro() if readonly else get_provider_override()
     for k in ("kind", "base_url", "model"):
         if override.get(k):
             prov[k] = override[k]

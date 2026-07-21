@@ -122,7 +122,23 @@ code   = policy.exit_code(results)
 
 `DEFAULT_POLICY` 只列**当前已实现**的检查。声称需要一个还不存在的 id，会因为
 「缺席 required → unknown」把每台干净机器误报成 UNKNOWN；新检查随其所在 PR 一起
-按需加入 required。
+按需加入 required。当前 required = `{python, sqlite, storage, provider.config, provider.network}`。
+
+## provider 三步链与「doctor 绝不计费」
+
+`provider.config → provider.network → provider.auth` 分层归因，让「LLM 用不了」精确到哪一层：
+
+- **config**（required，纯逻辑）：配置齐不齐、key 从哪来。`meta.source` 报清每个字段来自
+  DB 覆盖还是 yaml、key 来自 override 还是 `env:<名字>`——企业最常见的坑是「配了但来源对不上」。
+- **network**（required）：纯 socket + TLS，**不碰 LLM SDK**（SDK 缺 key 会 raise，会把「没填 key」
+  误报成「网络不通」）；`https` 必带 SNI + 证书校验。措辞只说「TCP/TLS 可达」，不说「API 可达」——
+  路径写错（`/v1`→`/v2`）时 TCP/TLS 照样通，那留给 auth 暴露。检测到代理时改走代理测真实路径。
+- **auth**（**非 required，尽力而为**）：只用零成本端点（`GET /models`）验证凭证，**doctor 绝不发计费请求**。
+  provider 没有这种端点时 `skipped`（留给 `ragkernel setup` 做一次带最小推理的完整验证）——因为它
+  非 required，skipped 不会把整体顶成 unknown。但真鉴权失败（401/403）仍是 `failed/error`、照常计入健康。
+
+依赖按**字段**判定、不按上一步 result 短路：没填 key 时 network 照跑（它只要 base_url），
+用户于是只看到**一条** config 错误、而网络归因仍准确。
 
 ---
 

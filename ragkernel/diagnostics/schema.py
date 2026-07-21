@@ -133,11 +133,15 @@ class HealthPolicy:
 
 # 只列**当前已实现**的检查。声称需要一个还不存在的 id，会因为上面
 # 「缺席 required → unknown」的逻辑，把每台干净机器都误报成 UNKNOWN。
-# provider.config/network/auth 在 provider 检查落地的那个 PR 里一并加入。
+# 注意 provider.auth **不在** required 里：它是尽力而为的（很多 provider 没有
+# 零成本鉴权端点、doctor 又绝不计费，此时 auth 会 skipped）。真失败（401）仍会
+# 按 severity 计入健康；只是「没验证成」不该把整体顶成 unknown。
 DEFAULT_POLICY = HealthPolicy(required={
     "python",
     "sqlite",
     "storage",
+    "provider.config",
+    "provider.network",
 })
 
 # id 改名时的兼容映射（旧 id → 新 id）。发布过的 id 不许直接重命名——
