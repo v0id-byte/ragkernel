@@ -72,11 +72,19 @@ def check_storage() -> CheckResult:
                 f"父目录不存在：{parent}",
                 fix=f"mkdir -p {d}", path=str(d),
             )
-        if not os.access(parent, os.W_OK):
+        # os.access 是咨询性的、在只读或写满的文件系统上会撒谎（root 尤甚），
+        # 恰恰在「首次安装但盘不可写」这个本该被抓到的场景放行。实际往 parent
+        # 写一个临时文件才算数——这也正是首次运行 mkdir(data_dir) 时会发生的写。
+        # 只写临时文件随即删除，不创建 data 目录本身，保持 doctor 只读。
+        try:
+            with tempfile.NamedTemporaryFile(dir=parent, prefix=".ragkernel-writetest-"):
+                pass
+        except OSError as e:
             return failed(
                 "storage", CATEGORY, "数据目录",
-                f"父目录不可写，无法创建 {d}",
+                f"父目录不可写，无法创建 {d}（{e.strerror or e}）",
                 fix=f"chown -R $USER {parent}", path=str(d),
+                exception_type=type(e).__name__,
             )
         return passed("storage", CATEGORY, "数据目录",
                       f"尚未创建（首次运行时自动建）：{d}", path=str(d), exists=False)

@@ -104,11 +104,21 @@ class HealthPolicy:
     strict: bool = False  # 只改退出码，不改写 severity（改写会让 JSON 输出撒谎）
 
     def evaluate(self, results: list[CheckResult]) -> HealthStatus:
-        # required 项没跑成 → 无法判定，不能谎报健康。
-        # 只看 required：--skip models 之类不该把整体顶成 unknown。
-        if any(r.status == "skipped" and r.id in self.required for r in results):
-            return "unknown"
+        # required 的检查必须真的跑过并有结论，否则无法判定、不能谎报健康。
+        # 两种「没跑成」都算 unknown：
+        #   - 被跳过（present 但 skipped，如 --offline 下的网络检查）；
+        #   - 完全缺席（根本没注册/没进 results）——尤其隐蔽：policy 声称需要某项、
+        #     但它还没实现时，只查 skipped 永远不触发，会静默返回 healthy。
+        # 只看 required：--skip models 之类可选项被跳过，不该把整体顶成 unknown。
+        by_id = {r.id: r for r in results}
+        for rid in self.required:
+            r = by_id.get(rid)
+            if r is None or r.status == "skipped":
+                return "unknown"
 
+        # 失败按 severity 计入健康，与 required 无关：非必需项（如 models 未缓存）
+        # 失败也应让系统 degraded——required 只决定「没跑成→unknown」，不决定
+        # 「哪些失败算数」。详见 docs/diagnostics.md。
         failures = [r for r in results if r.status == "failed"]
         if not failures:
             return "healthy"
@@ -121,13 +131,13 @@ class HealthPolicy:
         return EXIT_BY_STATUS[self.evaluate(results)]
 
 
+# 只列**当前已实现**的检查。声称需要一个还不存在的 id，会因为上面
+# 「缺席 required → unknown」的逻辑，把每台干净机器都误报成 UNKNOWN。
+# provider.config/network/auth 在 provider 检查落地的那个 PR 里一并加入。
 DEFAULT_POLICY = HealthPolicy(required={
     "python",
     "sqlite",
     "storage",
-    "provider.config",
-    "provider.network",
-    "provider.auth",
 })
 
 # id 改名时的兼容映射（旧 id → 新 id）。发布过的 id 不许直接重命名——

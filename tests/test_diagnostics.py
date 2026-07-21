@@ -74,15 +74,35 @@ def test_all_passed_is_healthy():
 def test_warning_only_is_degraded_not_unhealthy():
     """模型没缓存这类：确实没通过，但系统健康。
     一刀切「任意 ✗ 非零」会误伤 docker build 里模型下载之前的 doctor。"""
+    p = HealthPolicy(required={"models"})
     r = [failed("models", "model", "t", "not cached", severity="warning")]
-    assert _policy().evaluate(r) == "degraded"
-    assert _policy().exit_code(r) == 1
+    assert p.evaluate(r) == "degraded"
+    assert p.exit_code(r) == 1
 
 
 def test_error_is_unhealthy():
+    p = HealthPolicy(required={"storage"})
     r = [failed("storage", "storage", "t", "not writable", severity="error")]
-    assert _policy().evaluate(r) == "unhealthy"
-    assert _policy().exit_code(r) == 2
+    assert p.evaluate(r) == "unhealthy"
+    assert p.exit_code(r) == 2
+
+
+def test_missing_required_check_is_unknown_not_healthy():
+    """policy 声称需要一项、但它根本没进 results（还没实现/没注册）——不能静默
+    返回 healthy。这是 DEFAULT_POLICY 曾把 provider.* 列为必需却没实现时的真实 bug。"""
+    p = HealthPolicy(required={"provider.auth"})
+    r = [passed("python", "runtime", "t")]  # provider.auth 完全缺席
+    assert p.evaluate(r) == "unknown"
+    assert p.exit_code(r) == 3
+
+
+def test_non_required_failure_still_counts():
+    """required 只决定「没跑成→unknown」，不决定「哪些失败算数」。
+    非必需项（models）失败也应让系统 degraded——这是 plan 明确要的行为，
+    锁死它，避免以后被「只统计 required 的失败」的改动带偏。"""
+    p = HealthPolicy(required=set())
+    r = [failed("models", "model", "t", "not cached", severity="warning")]
+    assert p.evaluate(r) == "degraded"
 
 
 def test_skipped_required_check_is_unknown_not_healthy():
@@ -99,8 +119,9 @@ def test_skipped_optional_check_does_not_trigger_unknown():
 
 
 def test_strict_promotes_warning_to_unhealthy():
+    p = HealthPolicy(required={"models"}, strict=True)
     r = [failed("models", "model", "t", "not cached", severity="warning")]
-    assert _policy(strict=True).evaluate(r) == "unhealthy"
+    assert p.evaluate(r) == "unhealthy"
 
 
 def test_strict_never_turns_skipped_into_failed():
@@ -197,5 +218,43 @@ def test_checks_do_not_import_huggingface():
     assert r.returncode == 0, f"诊断层泄漏了重依赖: {r.stdout.strip()}"
 
 
-def test_default_policy_covers_core_checks():
+def test_default_policy_only_requires_existing_checks():
+    """DEFAULT_POLICY 不能列还没实现的 id——否则「缺席 required → unknown」会把
+    每台干净机器误报成 UNKNOWN。provider.* 在 provider 检查落地那个 PR 才加入。"""
+    from ragkernel.diagnostics import run
+
+    registered = {r.id for r in run()}
+    assert DEFAULT_POLICY.required <= registered, (
+        f"required 里有未注册的检查: {DEFAULT_POLICY.required - registered}"
+    )
     assert {"python", "sqlite", "storage"} <= DEFAULT_POLICY.required
+
+
+# ---------------------------------------------------------------- checks: storage
+
+def test_storage_write_check_catches_unwritable_parent(tmp_path, monkeypatch):
+    """父目录不可创建子目录时，doctor 必须报 failed。
+    os.access 会对「parent 其实是个文件」这类情况撒谎（文件可写 ≠ 能在其下建目录），
+    所以改成实际写临时文件——这个用例正是 os.access 会放行、实写会抓到的场景。"""
+    parent_is_a_file = tmp_path / "not-a-dir"
+    parent_is_a_file.write_text("i am a file, not a directory")
+    monkeypatch.setenv("RAGKERNEL_DATA_DIR", str(parent_is_a_file / "data"))
+
+    from ragkernel.checks.storage import check_storage
+
+    r = check_storage()
+    assert r.status == "failed", "把文件当父目录，实写会失败，应报 failed"
+    assert "不可写" in r.summary
+
+
+def test_storage_ok_when_parent_writable(tmp_path, monkeypatch):
+    """data 目录尚未创建、但父目录可写：passed 且标注 exists=False（不实际建目录）。"""
+    monkeypatch.setenv("RAGKERNEL_DATA_DIR", str(tmp_path / "data"))
+
+    from ragkernel.checks.storage import check_storage
+
+    r = check_storage()
+    assert r.status == "passed"
+    assert r.meta["exists"] is False
+    # doctor 只读：探测不应真的把 data 目录建出来
+    assert not (tmp_path / "data").exists()

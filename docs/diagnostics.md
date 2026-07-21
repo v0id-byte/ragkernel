@@ -70,7 +70,7 @@ dashboard 里 `where check_id='provider.auth'` 的历史统计会因改名断掉
 0  HEALTHY     全部通过
 1  DEGRADED    有 failed，但都是 warning——功能缺失，系统健康
 2  UNHEALTHY   有 failed/error
-3  UNKNOWN     required 的检查被跳过，无法判定
+3  UNKNOWN     required 的检查没跑成（被跳过，或完全缺席），无法判定
 ```
 
 一刀切「任意失败即非零」会误伤：`docker build` 里在模型下载**之前**跑 doctor，
@@ -81,8 +81,9 @@ ragkernel doctor || [ $? -le 1 ]     # 容忍 degraded
 ```
 
 **UNKNOWN 单独一档**，是为了不把「没测」谎报成「健康」——`--offline` 下 provider
-全部跳过时若退 0，部署脚本会以为 provider 没问题。判定只看 policy 里 `required` 的项，
-所以 `--skip models` 之类不会莫名把整体顶成 3。
+全部跳过时若退 0，部署脚本会以为 provider 没问题。「没跑成」包含两种：被跳过，以及
+**完全缺席**（一个 required 的 id 根本没进结果——比如 policy 列了个还没实现的检查）。
+判定只看 policy 里 `required` 的项，所以 `--skip models` 之类可选项不会莫名把整体顶成 3。
 
 ### `--strict` 的确切语义
 
@@ -107,6 +108,21 @@ policy = HealthPolicy(required={"python", "sqlite", "storage"}, strict=False)
 status = policy.evaluate(results)      # healthy | degraded | unhealthy | unknown
 code   = policy.exit_code(results)
 ```
+
+**`required` 的确切作用范围：它只决定「没跑成 → UNKNOWN」，不决定「哪些失败算数」。**
+一个 `required` 的检查若被跳过（`--offline`）或完全缺席（还没实现/没注册），无法判定，
+返回 `unknown`。这正是 K8s vs 开发机的差异所在：某项被跳过时，把它列为 required 的
+策略会 `unknown`（不就绪），没列的策略照常放行。
+
+但**失败**（`status == "failed"`）一律按 `severity` 计入健康，与 required 无关——
+一个真的失败了的检查代表真的有问题，在哪台机器上都算。所以非必需的 `models` 未缓存
+（`failed/warning`）会让系统 `degraded`，这是刻意的：`required` 管「有没有测」，
+`severity` 管「测出来多严重」，两者不重叠。想让某项不影响健康，应让**该检查**返回
+合适的 `status/severity`，而不是靠把它移出 `required`。
+
+`DEFAULT_POLICY` 只列**当前已实现**的检查。声称需要一个还不存在的 id，会因为
+「缺席 required → unknown」把每台干净机器误报成 UNKNOWN；新检查随其所在 PR 一起
+按需加入 required。
 
 ---
 

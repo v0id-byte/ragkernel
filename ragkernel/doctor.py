@@ -44,9 +44,12 @@ def _installed_at() -> dict:
     if not p.exists():
         return {}
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        data = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
+    # 合法 JSON 但不是对象（[]、null、"str"，手写坏了很常见）也要按损坏处理——
+    # 否则 render_text 立刻 .get() 崩掉，JSON 模式也会违反 install 必为对象的契约。
+    return data if isinstance(data, dict) else {}
 
 
 def _commit() -> str | None:
@@ -101,6 +104,17 @@ def render_text(results: list[CheckResult], policy: HealthPolicy, *, verbose: bo
     return "\n".join(lines)
 
 
+def _public_check(r: CheckResult, verbose: bool) -> dict:
+    d = r.to_dict()
+    if not verbose:
+        # exception repr 可能含本地路径或配置派生值（未来 provider 检查的异常里可能有
+        # base_url 之类）——doctor --json > issue.json 贴 GitHub 是可预期用法，默认不该带。
+        # --verbose 才是文档承诺显示异常细节的模式。exception_type 是裸类名、已出现在
+        # summary 里，保留它便于非 verbose 下 triage。
+        d["meta"] = {k: v for k, v in d["meta"].items() if k != "exception"}
+    return d
+
+
 def render_json(results: list[CheckResult], policy: HealthPolicy, *, verbose: bool) -> str:
     return json.dumps({
         "schema_version": DIAGNOSTICS_SCHEMA_VERSION,
@@ -113,7 +127,7 @@ def render_json(results: list[CheckResult], policy: HealthPolicy, *, verbose: bo
             "exit_code": policy.exit_code(results),
             "exit_policy": "strict" if policy.strict else "default",
         },
-        "checks": [r.to_dict() for r in results],
+        "checks": [_public_check(r, verbose) for r in results],
     }, ensure_ascii=False, indent=2)
 
 
