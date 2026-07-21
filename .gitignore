@@ -1,5 +1,7 @@
 .env
 data/
+# 安装指纹(install.json) + setup 并发锁：部署元数据，与 data/ 的运行数据分开
+.ragkernel/
 eval/eval_out/
 __pycache__/
 *.pyc
