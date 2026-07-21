@@ -26,9 +26,9 @@ class CheckSpec:
 def _registry() -> list[CheckSpec]:
     # 顺序显式固定：doctor 的输出就是产品体验，不能因为 import 顺序变了就漂移。
     # 函数内导入，保持 cli.py 那套「重依赖惰性加载」的约定。
-    from ..checks import provider, runtime, storage
+    from ..checks import models, provider, runtime, storage
 
-    return [*runtime.CHECKS, *storage.CHECKS, *provider.CHECKS]
+    return [*runtime.CHECKS, *storage.CHECKS, *provider.CHECKS, *models.CHECKS]
 
 
 def run(*, offline: bool = False, minimal: bool = False) -> list[CheckResult]:
