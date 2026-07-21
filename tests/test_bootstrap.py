@@ -73,6 +73,25 @@ def test_provider_yes_sets_override_with_env_key(isolated, monkeypatch):
     assert prov.get("api_key") == "sk-test-1234"
 
 
+def test_provider_yes_switching_requires_fresh_key(isolated, monkeypatch):
+    """MiniMax→Claude 不能沿用旧 key：--yes --provider claude 无新 key → fail-fast。"""
+    monkeypatch.setenv("MINIMAX_API_KEY", "sk-minimax-old")  # 现有 key
+    monkeypatch.delenv("RAGKERNEL_SETUP_API_KEY", raising=False)
+    with pytest.raises(SystemExit) as ei:
+        bootstrap._step_provider(_args(yes=True, provider="claude"))
+    assert ei.value.code == 1
+
+
+def test_provider_yes_model_flag_acts(isolated, monkeypatch, capsys):
+    """--yes --model X 是显式改动，不该打印「保持现状」。"""
+    monkeypatch.setenv("MINIMAX_API_KEY", "sk-mm")  # 现有 key，非切换
+    bootstrap._step_provider(_args(yes=True, model="MiniMax-M3-Pro"))
+    assert "保持现状" not in capsys.readouterr().out
+
+    from ragkernel import config
+    assert config.provider(readonly=True)["model"] == "MiniMax-M3-Pro"
+
+
 def test_provider_interactive_menu_sets_override(isolated, monkeypatch):
     """交互分支：首装无覆盖 → 直接进菜单，选 1（MiniMax）+ getpass key。"""
     monkeypatch.setattr(bootstrap, "_interactive", lambda: True)
@@ -153,6 +172,19 @@ def test_admin_yes_creates_with_env_password(isolated, monkeypatch):
     assert any(u["username"] == "alice" and u["is_admin"] for u in users)
 
 
+def test_admin_creates_when_only_deactivated_admin_exists(isolated, monkeypatch):
+    """停用的 admin 登录不了——不能拿它当「已有管理员」跳过建号，否则部署没有可用管理员。"""
+    from ragkernel import auth
+
+    r = auth.create_user("olddisabled", "pw", is_admin=True)
+    auth.set_active(r["id"], False)
+    monkeypatch.setenv("RAGKERNEL_SETUP_ADMIN_PASSWORD", "newpw")
+
+    bootstrap._step_admin(_args(yes=True, admin_user="newadmin"))
+    active_admins = [u for u in auth.list_users() if u["is_admin"] and u["is_active"]]
+    assert any(u["username"] == "newadmin" for u in active_admins)
+
+
 # ------------------------------------------------------------------ models
 
 def test_models_no_models_flag_skips(isolated, capsys):
@@ -170,6 +202,19 @@ def test_models_yes_defaults_to_not_downloading(isolated, monkeypatch, capsys):
     bootstrap._step_models(_args(yes=True))
     assert called["download"] is False
     assert "暂不下载" in capsys.readouterr().out
+
+
+def test_models_download_error_raises(isolated, monkeypatch):
+    """用户明确选了下载，失败就不能把它当成功走到 _wrapup。"""
+    monkeypatch.setattr("ragkernel.models.get_cache_status",
+                        lambda: [SimpleNamespace(role="embedding", status="missing")])
+    monkeypatch.setattr("ragkernel.models.download",
+                        lambda: [SimpleNamespace(role="embedding", status="error", error="disk full")])
+    monkeypatch.setattr(bootstrap, "_interactive", lambda: True)
+    monkeypatch.setattr(bootstrap, "_confirm", lambda *a, **k: True)  # 用户答 yes
+    with pytest.raises(SystemExit) as ei:
+        bootstrap._step_models(_args())
+    assert ei.value.code == 1
 
 
 # ------------------------------------------------------------------ token
@@ -200,6 +245,39 @@ def test_token_shown_with_show_token(isolated, capsys):
     auth.create_user("boss", "pw", is_admin=True)
     bootstrap._step_token(_args(with_token=True, show_token=True))
     assert "Bearer" in capsys.readouterr().out
+
+
+def test_token_masked_when_yes_even_from_tty(isolated, monkeypatch, capsys):
+    """--yes 是自动化模式：即便从 pty（CI 常见）跑，也默认脱敏，别漏长效凭证进日志。"""
+    monkeypatch.setattr(bootstrap, "_interactive", lambda: True)  # 假装 tty
+    from ragkernel import auth
+
+    auth.create_user("boss", "pw", is_admin=True)
+    bootstrap._step_token(_args(with_token=True, yes=True))
+    out = capsys.readouterr().out
+    assert "Bearer" not in out and "完整值未打印" in out
+
+
+def test_token_skips_when_no_active_admin(isolated, capsys):
+    """所有 admin 都被停用时，不能签发到一个登录不了的账号。"""
+    from ragkernel import auth
+
+    r = auth.create_user("disabled", "pw", is_admin=True)
+    auth.set_active(r["id"], False)
+    bootstrap._step_token(_args(with_token=True))
+    assert "无启用中的管理员" in capsys.readouterr().out
+    assert auth.list_tokens() == []
+
+
+def test_token_output_honors_mcp_env_overrides(isolated, monkeypatch, capsys):
+    """打印的 Agent 配置 URL 要用 RAGKERNEL_MCP_HOST/PORT，与 cmd_mcp 启服务同源。"""
+    monkeypatch.setenv("RAGKERNEL_MCP_HOST", "10.0.0.5")
+    monkeypatch.setenv("RAGKERNEL_MCP_PORT", "9999")
+    from ragkernel import auth
+
+    auth.create_user("boss", "pw", is_admin=True)
+    bootstrap._step_token(_args(with_token=True, show_token=True))
+    assert "10.0.0.5:9999" in capsys.readouterr().out
 
 
 # ------------------------------------------------------------------ run() 编排

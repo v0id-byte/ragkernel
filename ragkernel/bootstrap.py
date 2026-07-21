@@ -82,18 +82,27 @@ def _step_provider(args) -> None:
     if args.yes or not _interactive():
         preset_key = args.provider
         new_key = _env("RAGKERNEL_SETUP_API_KEY")
-        if not preset_key and not new_key:
-            print("provider：保持现状（未指定 --provider，也无 RAGKERNEL_SETUP_API_KEY）")
+        # --base-url / --model 也是显式改动意图，不能因为没给 --provider/key 就当「保持现状」
+        if not (preset_key or new_key or args.base_url is not None or args.model):
+            print("provider：保持现状（未指定 --provider / --base-url / --model，也无 RAGKERNEL_SETUP_API_KEY）")
             return
         preset = _PRESETS[preset_key] if preset_key else None
         kind = preset["kind"] if preset else prov.get("kind", "anthropic")
         base = args.base_url if args.base_url is not None else (preset["base_url"] if preset else prov.get("base_url", ""))
         model = args.model or (preset["model"] if preset else prov.get("model"))
-        # anthropic 缺 key（现存的也没有）→ fail-fast
-        if kind != "openai" and not new_key and not cur_key:
-            raise SetupError("--yes 配置 provider 需要凭证：设 RAGKERNEL_SETUP_API_KEY（或 --skip provider）")
-        config.set_provider_override(kind, base, model, int(prov.get("max_tokens", 8000)),
-                                     new_key or None)
+
+        # 切换 provider（显式 --provider）绝不沿用旧 key——否则 MiniMax→Claude 会拿
+        # MiniMax 的 key 去请求 Claude、静默鉴权失败。切换必须带新 key。
+        switching = preset_key is not None
+        if kind != "openai":
+            if switching and not new_key:
+                raise SetupError("切换 provider 需要新的 API key：设 RAGKERNEL_SETUP_API_KEY"
+                                 "（避免沿用上一个 provider 的 key）")
+            if not new_key and not cur_key:
+                raise SetupError("--yes 配置 provider 需要凭证：设 RAGKERNEL_SETUP_API_KEY（或 --skip provider）")
+        # switching 时上面已保证 anthropic 有 new_key；写 new_key。非切换时空 key = None（保留已存）
+        key_to_write = new_key if switching else (new_key or None)
+        config.set_provider_override(kind, base, model, int(prov.get("max_tokens", 8000)), key_to_write)
         print(f"provider：已设为 {kind} · {model}")
         return
 
@@ -125,11 +134,15 @@ def _step_provider(args) -> None:
         base = _ask("base_url", preset["base_url"])
         model = _ask("model", preset["model"])
 
-    hint = "（留空保持现有 key）" if cur_key else ""
+    switching = (kind, base, model) != (prov.get("kind"), prov.get("base_url"), prov.get("model"))
+    hint = "（留空保持现有 key）" if (cur_key and not switching) else ""
     entered = getpass.getpass(f"API key{hint}：").strip()
     api_key = entered or None  # None = set_provider_override 保留已存 key
     if not entered and not cur_key and kind != "openai":
         print("  ⚠️  未配置 key，anthropic provider 无法工作——稍后可 `ragkernel setup --only provider` 补。")
+    elif not entered and cur_key and switching:
+        # 切换了 provider 却没输新 key——旧 key 多半不匹配新服务，明确提示（不阻断，交互用户自决）
+        print("  ⚠️  切换了 provider 但未输入新 key，将沿用旧 key（很可能与新服务不匹配）。")
 
     config.set_provider_override(kind, base, model, int(prov.get("max_tokens", 8000)), api_key)
     eff = config.provider(readonly=True)
@@ -155,10 +168,18 @@ def _connectivity_check() -> None:
         print(f"  {sym} {r.title}  {r.summary}")
 
 
+def _active_admins() -> list[dict]:
+    """只算**启用中**的管理员。被停用的 admin 登录不了（auth 只认 is_active=1），
+    拿它当「已有管理员」跳过建号，会让部署没有可用管理员。"""
+    from . import auth
+
+    return [u for u in auth.list_users() if u["is_admin"] and u["is_active"]]
+
+
 def _step_admin(args) -> None:
     from . import auth
 
-    admins = [u for u in auth.list_users() if u["is_admin"]]
+    admins = _active_admins()
     if admins:
         print(f"管理员：已存在（{admins[0]['username']}{' 等' if len(admins) > 1 else ''}），跳过。")
         return
@@ -209,20 +230,25 @@ def _step_models(args) -> None:
         print("模型：暂不下载；首次使用会自动下，或随时 `ragkernel models`。")
         return
 
-    for r in models.download():
+    results = models.download()
+    for r in results:
         mark = "✓" if r.status in ("cached", "downloaded") else "✗"
         print(f"  {mark} {r.role} {r.status}{f'：{r.error}' if r.error else ''}")
+    # 用户明确选了下载，就不能把失败当成功走到 _wrapup——磁盘满/断网时自动化会误判初始化成功
+    bad = [r for r in results if r.status in ("error", "missing", "incomplete")]
+    if bad:
+        raise SetupError(f"模型下载失败（{len(bad)} 个）——见上，磁盘/网络排查后重试 `ragkernel models`。")
 
 
 def _step_token(args) -> None:
-    from . import auth
+    from . import auth, config
 
     if not (args.with_token or (args.only and "token" in _selected(args))):
         return  # 默认不签发（安装动作不该顺手发长期凭证）
 
-    admins = [u for u in auth.list_users() if u["is_admin"]]
+    admins = _active_admins()  # 必须是启用中的——停用的 admin，user_id_by_username 返回 None，签发会失败
     if not admins:
-        print("MCP token：尚无用户，跳过（先建管理员）。")
+        print("MCP token：无启用中的管理员，跳过（先建/启用管理员）。")
         return
     user = admins[0]["username"]
     uid = auth.user_id_by_username(user)
@@ -232,10 +258,13 @@ def _step_token(args) -> None:
         print("MCP token：label「claude-code」可能已存在——先 `ragkernel token revoke` 或换 label。")
         return
 
-    show = args.show_token or _interactive()
-    from . import config
+    # --yes 是自动化模式：即便从 pty（CI 常见）跑、_interactive() 为真，也默认脱敏，
+    # 别把长效凭证漏进终端/CI 日志。只有显式 --show-token 才打印完整值。
+    show = args.show_token or (_interactive() and not args.yes)
     mcfg = config.settings().get("mcp") or {}
-    host, port = mcfg.get("host", "127.0.0.1"), mcfg.get("port", 8765)
+    # 与 cmd_mcp 同源：env 覆盖优先，否则 yaml，否则默认——否则打印的 URL 与实际服务端口不符
+    host = os.environ.get("RAGKERNEL_MCP_HOST") or mcfg.get("host", "127.0.0.1")
+    port = int(os.environ.get("RAGKERNEL_MCP_PORT") or mcfg.get("port", 8765))
     print(f"✓ 已为 {user} 签发 MCP agent token（label claude-code，365 天）")
     if show:
         print("  只显示这一次，贴进 Agent 配置的 Authorization: Bearer：\n")

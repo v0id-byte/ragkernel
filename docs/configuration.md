@@ -63,10 +63,10 @@ ragkernel setup --with-token       # 顺带签发 MCP agent token
 
 | 步骤 | `--yes` 行为 | 缺前置 |
 |---|---|---|
-| provider | 有 `--provider` 或 `RAGKERNEL_SETUP_API_KEY` 才动；否则保持现状 | 设置 anthropic 却无 key → **非零退出** |
-| admin | 无管理员时用 `$USER`（或 `--admin-user`）+ 环境密码创建 | 无 `RAGKERNEL_SETUP_ADMIN_PASSWORD` → **非零退出** |
-| models | **默认不下载**（`--no-models` 亦可显式跳过） | 磁盘不足 → fail |
-| token | 默认不签；`--with-token` 才签，默认脱敏 | —— |
+| provider | 有 `--provider` / `--base-url` / `--model` / `RAGKERNEL_SETUP_API_KEY` 才动；否则保持现状 | 设置 anthropic 却无 key → **非零退出**；**切换 provider（`--provider`）必须带新 key**（绝不沿用旧 provider 的 key） |
+| admin | **无启用中管理员**时用 `$USER`（或 `--admin-user`）+ 环境密码创建（被停用的 admin 不算） | 无 `RAGKERNEL_SETUP_ADMIN_PASSWORD` → **非零退出** |
+| models | **默认不下载**（`--no-models` 亦可显式跳过）；用户明确选下载后**失败即非零退出** | 磁盘满/断网 → fail |
+| token | 默认不签；`--with-token` 才签，**`--yes` 一律脱敏**（即便从 pty），仅 `--show-token` 打印完整值。URL 取 `RAGKERNEL_MCP_HOST/PORT` | —— |
 
 **「存在」判定是「非空」**：`RAGKERNEL_SETUP_API_KEY=""` 视同未设（声明了变量但没注入 secret
 是常见 CI 事故）。`--yes` 缺必需凭证一律 fail-fast，不静默跳过——否则 CI 显示成功、服务启动即挂。
