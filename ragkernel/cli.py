@@ -32,12 +32,16 @@ def cmd_stats():
 
 
 def cmd_models():
-    from . import embed, rerank
+    from . import models
 
-    print("预载 embedding 模型（首次会下载 ~2GB，之后走缓存）…")
-    embed.embed(["warmup"])
-    print("预载 reranker 模型…")
-    rerank.get()
+    print("预载本地模型（首次下载 ~2GB，之后走缓存）…")
+    for r in models.download():
+        if r.status == "error":
+            print(f"  ✗ {r.role}：{r.error}")
+        elif r.status == "downloaded":
+            print(f"  ✓ {r.role} 已下载（{r.name}）")
+        else:
+            print(f"  ✓ {r.role} 已就绪（{r.name}）")
     print("模型就绪。")
 
 

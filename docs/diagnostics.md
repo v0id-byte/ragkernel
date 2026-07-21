@@ -150,6 +150,15 @@ code   = policy.exit_code(results)
 依赖按**字段**判定、不按上一步 result 短路：没填 key 时 network 照跑（它只要 base_url），
 用户于是只看到**一条** config 错误、而网络归因仍准确。
 
+## 本地模型检查
+
+`models`（**非 required**）探测 embedding / reranker 是否就绪，经 `models.get_cache_status()`
+纯文件系统扫描 HF 缓存、不 import `huggingface_hub`/`torch`。关键：**判完整性不判目录存在**——
+HF 缓存目录在下载中断后照样在、里头一堆指向缺失 blob 的悬空软链，只判目录会让 doctor 报 ✓
+而运行时加载才炸。跟随软链验证 config + tokenizer + 权重三者齐全，区分 `missing`（从没装）/
+`incomplete`（装了一半）/ `error`。未就绪 → `warning`（degraded，非 unhealthy）：模型没缓存是
+功能缺失、不是系统坏了（`docker build` 里模型下载之前跑 doctor 是正常场景）。
+
 ---
 
 ## `--json` 输出

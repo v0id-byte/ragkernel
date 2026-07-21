@@ -209,7 +209,8 @@ def test_checks_do_not_import_huggingface():
     """
     code = (
         "import sys;"
-        "import ragkernel.checks.runtime, ragkernel.checks.storage, ragkernel.checks.provider;"
+        "import ragkernel.checks.runtime, ragkernel.checks.storage, "
+        "ragkernel.checks.provider, ragkernel.checks.models;"
         "import ragkernel.diagnostics;"
         "leaked=[m for m in sys.modules if 'huggingface' in m or 'torch' in m];"
         "print(leaked);"
