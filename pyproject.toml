@@ -7,6 +7,13 @@ dependencies = [
     "anthropic>=0.40",
     "openai>=1.40",
     "sentence-transformers>=3.0",
+    # torch/torchvision 本是传递依赖（torch 经 sentence-transformers，torchvision 经
+    # docling-ibm-models），这里提为直接依赖仅仅是为了让下面的 [tool.uv.sources] 生效——
+    # uv 的 sources 只作用于直接依赖，写给传递依赖会被静默忽略。
+    # 两个都要提：只固定 torch 会让 Linux 上出现 torch==2.13.0+cpu 配 PyPI 的非-cpu
+    # torchvision，ABI 不匹配，docling 用到 torchvision 算子时会在运行时炸。
+    "torch>=2.0",
+    "torchvision>=0.15",
     "sqlite-vec>=0.1.6",
     "jieba>=0.42",
     "pyyaml>=6.0",
@@ -37,6 +44,21 @@ cad = [
 dev = [
     "pytest>=8.0",
 ]
+
+# torch 只经 sentence-transformers 间接引入，且本项目只用 mps/cpu（embed.py、rerank.py 里
+# 设备是 "mps" or "cpu"，没有 CUDA 分支）。默认 PyPI 源的 Linux torch 会带 cuda-toolkit /
+# nvidia-*-cu13 / triton 共几 GB，纯属浪费——固定到 CPU 源。
+# marker 限 linux：macOS 的 torch 本就是统一轮子（走 MPS），不能动。
+# 注意：必须落在 lockfile 上。uv sync 是 lock 驱动的，UV_TORCH_BACKEND 环境变量对它无效，
+# 且 uv sync 不接受 --torch-backend（该 flag 只在 uv pip install）。
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
 
 [build-system]
 requires = ["hatchling"]
