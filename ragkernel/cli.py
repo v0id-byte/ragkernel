@@ -35,13 +35,20 @@ def cmd_models():
     from . import models
 
     print("预载本地模型（首次下载 ~2GB，之后走缓存）…")
-    for r in models.download():
+    results = models.download()
+    for r in results:
         if r.status == "error":
             print(f"  ✗ {r.role}：{r.error}")
         elif r.status == "downloaded":
             print(f"  ✓ {r.role} 已下载（{r.name}）")
         else:
             print(f"  ✓ {r.role} 已就绪（{r.name}）")
+    # `ragkernel models` 既是预载命令、也是 doctor 的修复命令——失败必须非零退出，
+    # 否则自动化（含 install 向导）会把失败当成功，到首次使用才发现模型缺失。
+    bad = [r for r in results if r.status in ("error", "missing", "incomplete")]
+    if bad:
+        print(f"模型未就绪（{len(bad)} 个失败）。", file=sys.stderr)
+        sys.exit(1)
     print("模型就绪。")
 
 

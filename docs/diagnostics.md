@@ -153,11 +153,19 @@ code   = policy.exit_code(results)
 ## 本地模型检查
 
 `models`（**非 required**）探测 embedding / reranker 是否就绪，经 `models.get_cache_status()`
-纯文件系统扫描 HF 缓存、不 import `huggingface_hub`/`torch`。关键：**判完整性不判目录存在**——
-HF 缓存目录在下载中断后照样在、里头一堆指向缺失 blob 的悬空软链，只判目录会让 doctor 报 ✓
-而运行时加载才炸。跟随软链验证 config + tokenizer + 权重三者齐全，区分 `missing`（从没装）/
-`incomplete`（装了一半）/ `error`。未就绪 → `warning`（degraded，非 unhealthy）：模型没缓存是
-功能缺失、不是系统坏了（`docker build` 里模型下载之前跑 doctor 是正常场景）。
+纯文件系统扫描缓存、不 import `huggingface_hub`/`torch`。缓存根覆盖 `SENTENCE_TRANSFORMERS_HOME`
+（Docker 用它作 cache_folder）/ `HF_HUB_CACHE` / `HF_HOME/hub` / 默认路径。
+
+关键：**判完整性不判目录存在**——HF 缓存目录在下载中断后照样在，只判目录会让 doctor 报 ✓
+而运行时加载才炸。校验的是 **`refs/main` 指向的那个 revision**（运行时加载的就是它，旧完整+新
+中断的组合只有盯住它才不会误报），跟随软链实际验证：`config.json` + **真分词器产物**
+（`tokenizer.json` / sentencepiece 等，不是只有 `tokenizer_config.json`）+ **完整权重**
+（sharded 时读 index 的 `weight_map` 要求每个分片都在）。区分 `missing`（从没装）/
+`incomplete`（装了一半）/ `error`。rerank 关闭时不探 reranker（运行时本就不加载它）。
+
+未就绪 → `warning`（degraded，非 unhealthy）：模型没缓存是功能缺失、不是系统坏了
+（`docker build` 里模型下载之前跑 doctor 是正常场景）。修复命令 `ragkernel models` **失败会非零退出**
+（它既是预载也是 doctor 的修复命令，不能把失败当成功）。
 
 ---
 
