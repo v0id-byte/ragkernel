@@ -49,11 +49,52 @@ def test_selected_respects_only_and_skip():
     assert bootstrap._selected(_args(only="models", skip="models")) == []
 
 
+def test_selected_rejects_unknown_step_names():
+    """--only admn 这类 typo 原先静默变空步骤 → 假成功退 0；必须拒绝。"""
+    with pytest.raises(SystemExit) as ei:
+        bootstrap._selected(_args(only="admn"))
+    assert ei.value.code == 1
+    with pytest.raises(SystemExit):
+        bootstrap._selected(_args(skip="modles"))
+
+
 # ------------------------------------------------------------------ provider
 
-def test_provider_yes_keeps_current_without_flag_or_key(isolated, capsys):
+def test_provider_yes_keeps_usable_current(isolated, monkeypatch, capsys):
+    """无改动意图 + 当前可用（有 key）→ 保持现状。"""
+    monkeypatch.setenv("MINIMAX_API_KEY", "sk-existing")
     bootstrap._step_provider(_args(yes=True))
     assert "保持现状" in capsys.readouterr().out
+
+
+def test_provider_yes_fails_when_current_unusable(isolated):
+    """无改动意图 + 当前 anthropic 缺 key → fail-fast，别装成功却一调 LLM 就挂。"""
+    with pytest.raises(SystemExit) as ei:
+        bootstrap._step_provider(_args(yes=True))
+    assert ei.value.code == 1
+
+
+def test_provider_yes_same_preset_reapply_no_key_ok(isolated, monkeypatch):
+    """幂等重跑 --provider minimax（当前就是 minimax、有 key）不该要求重输 key。"""
+    monkeypatch.setenv("MINIMAX_API_KEY", "sk-existing")
+    bootstrap._step_provider(_args(yes=True, provider="minimax"))  # 不抛
+    from ragkernel import config
+    assert config.provider(readonly=True)["model"] == "MiniMax-M3"
+
+
+def test_provider_yes_switch_to_openai_clears_stale_key(isolated, monkeypatch):
+    """MiniMax→local(openai) 无新 key：清掉旧云端 key（写 EMPTY），别当 bearer 发给新端点。"""
+    from ragkernel import config
+
+    config.set_provider_override("anthropic", "https://api.minimaxi.com/anthropic",
+                                 "MiniMax-M3", 8000, "sk-cloud-secret")
+    monkeypatch.delenv("RAGKERNEL_SETUP_API_KEY", raising=False)
+    bootstrap._step_provider(_args(yes=True, provider="local"))
+
+    eff = config.provider(readonly=True)
+    assert eff["kind"] == "openai"
+    assert eff.get("api_key") == "EMPTY"           # 旧云端 key 被清掉
+    assert eff.get("api_key") != "sk-cloud-secret"
 
 
 def test_provider_yes_fail_fast_setting_anthropic_without_key(isolated):
@@ -185,6 +226,19 @@ def test_admin_creates_when_only_deactivated_admin_exists(isolated, monkeypatch)
     assert any(u["username"] == "newadmin" for u in active_admins)
 
 
+def test_admin_yes_username_collision_fails_clearly(isolated, monkeypatch):
+    """停用首个 admin 后重跑、默认名与停用账号撞名 → 明确报错，不是未捕获的 IntegrityError。"""
+    from ragkernel import auth
+
+    r = auth.create_user("dupe", "pw", is_admin=True)
+    auth.set_active(r["id"], False)  # 停用，但用户名仍占用
+    monkeypatch.setenv("RAGKERNEL_SETUP_ADMIN_PASSWORD", "pw")
+
+    with pytest.raises(SystemExit) as ei:
+        bootstrap._step_admin(_args(yes=True, admin_user="dupe"))
+    assert ei.value.code == 1
+
+
 # ------------------------------------------------------------------ models
 
 def test_models_no_models_flag_skips(isolated, capsys):
@@ -280,6 +334,30 @@ def test_token_output_honors_mcp_env_overrides(isolated, monkeypatch, capsys):
     assert "10.0.0.5:9999" in capsys.readouterr().out
 
 
+def test_token_duplicate_label_raises_not_silent(isolated):
+    """--with-token 却签不出（label 已存在）不能静默返回让 run() 退 0——自动化会当成功。"""
+    from ragkernel import auth
+
+    r = auth.create_user("boss", "pw", is_admin=True)
+    auth.issue_token(r["id"], ttl_days=1, label="claude-code", token_kind="agent")  # 先占 label
+    with pytest.raises(SystemExit) as ei:
+        bootstrap._step_token(_args(with_token=True))
+    assert ei.value.code == 1
+
+
+def test_provider_interactive_manual_rejects_bad_kind(isolated, monkeypatch):
+    """交互手动填时 kind typo（opneai）被拒、重问，直到合法值。"""
+    monkeypatch.setattr(bootstrap, "_interactive", lambda: True)
+    monkeypatch.setattr(bootstrap, "_connectivity_check", lambda: None)
+    answers = iter(["4", "opneai", "openai", "http://x/v1", "m"])  # 手动 → 错 kind → 对 kind → base → model
+    monkeypatch.setattr("builtins.input", lambda *a: next(answers))
+    monkeypatch.setattr(bootstrap.getpass, "getpass", lambda *a: "k")
+
+    bootstrap._step_provider(_args())
+    from ragkernel import config
+    assert config.provider(readonly=True)["kind"] == "openai"
+
+
 # ------------------------------------------------------------------ run() 编排
 
 def test_reset_provider_short_circuits(isolated, capsys):
@@ -307,6 +385,7 @@ def test_concurrent_setup_is_blocked(isolated, monkeypatch, tmp_path):
 
 def test_full_run_yes_creates_admin_keeps_provider(isolated, monkeypatch, tmp_path):
     monkeypatch.setattr("ragkernel.config.ROOT", tmp_path)
+    monkeypatch.setenv("MINIMAX_API_KEY", "sk-usable")  # provider 可用，provider 步骤才能保持现状
     monkeypatch.setenv("RAGKERNEL_SETUP_ADMIN_PASSWORD", "pw12345")
     rc = bootstrap.run(_args(yes=True, no_models=True))
     assert rc == 0

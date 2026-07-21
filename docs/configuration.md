@@ -61,12 +61,14 @@ ragkernel setup --with-token       # 顺带签发 MCP agent token
 
 ### `--yes` 非交互策略
 
-| 步骤 | `--yes` 行为 | 缺前置 |
+| 步骤 | `--yes` 行为 | 缺前置 / 边界 |
 |---|---|---|
-| provider | 有 `--provider` / `--base-url` / `--model` / `RAGKERNEL_SETUP_API_KEY` 才动；否则保持现状 | 设置 anthropic 却无 key → **非零退出**；**切换 provider（`--provider`）必须带新 key**（绝不沿用旧 provider 的 key） |
-| admin | **无启用中管理员**时用 `$USER`（或 `--admin-user`）+ 环境密码创建（被停用的 admin 不算） | 无 `RAGKERNEL_SETUP_ADMIN_PASSWORD` → **非零退出** |
+| provider | 有 `--provider` / `--base-url` / `--model` / `RAGKERNEL_SETUP_API_KEY` 才动；否则「当前可用就保持、不可用就报错」 | 无改动意图但当前 anthropic 缺 key → **非零退出**（想推迟就 `--skip provider`）。**换端点**（kind/base_url 变）必须带新 key——anthropic 缺 key → 非零退出；切到 openai 缺 key → 写 `EMPTY` 清掉旧云端 key，绝不沿用。**只改 model**（同端点同 key）不算切换、不必重输 key；同预设幂等重跑也不要求重输 |
+| admin | **无启用中管理员**时用 `$USER`（或 `--admin-user`）+ 环境密码创建（被停用的 admin 不算） | 无 `RAGKERNEL_SETUP_ADMIN_PASSWORD` → 非零退出；用户名与既有账号（含被停用的）撞名 → 明确报错（换名或 `users activate`），不是未捕获 IntegrityError |
 | models | **默认不下载**（`--no-models` 亦可显式跳过）；用户明确选下载后**失败即非零退出** | 磁盘满/断网 → fail |
-| token | 默认不签；`--with-token` 才签，**`--yes` 一律脱敏**（即便从 pty），仅 `--show-token` 打印完整值。URL 取 `RAGKERNEL_MCP_HOST/PORT` | —— |
+| token | 默认不签；`--with-token` 才签，**`--yes` 一律脱敏**（即便从 pty），仅 `--show-token` 打印完整值。URL 取 `RAGKERNEL_MCP_HOST/PORT` | label `claude-code` 已存在、签不出 → **非零退出**（先 revoke 或 `--skip token`），不静默当成功 |
+
+`--only` / `--skip` 里的**未知步骤名**（如 `--only admn`）会**非零退出**，不静默变成空步骤假成功。
 
 **「存在」判定是「非空」**：`RAGKERNEL_SETUP_API_KEY=""` 视同未设（声明了变量但没注入 secret
 是常见 CI 事故）。`--yes` 缺必需凭证一律 fail-fast，不静默跳过——否则 CI 显示成功、服务启动即挂。

@@ -67,6 +67,13 @@ def _mask(key: str) -> str:
     return f"····{key[-4:]}" if len(key) >= 4 else "已配置"
 
 
+def _provider_usable(prov: dict, cur_key: str) -> bool:
+    """provider 是否可直接工作。openai 可用 "EMPTY"（本地 vLLM 忽略 key）；anthropic 需要 key。"""
+    if prov.get("kind") == "openai":
+        return True
+    return bool(cur_key)
+
+
 # ------------------------------------------------------------------ steps
 
 def _step_provider(args) -> None:
@@ -78,30 +85,42 @@ def _step_provider(args) -> None:
     cur_key = prov.get("api_key") or _env(env_name)
     configured = bool(override) or bool(cur_key)
 
-    # 非交互：只有显式 --provider 或提供了新 key 时才动；否则保持现状
     if args.yes or not _interactive():
         preset_key = args.provider
         new_key = _env("RAGKERNEL_SETUP_API_KEY")
-        # --base-url / --model 也是显式改动意图，不能因为没给 --provider/key 就当「保持现状」
-        if not (preset_key or new_key or args.base_url is not None or args.model):
-            print("provider：保持现状（未指定 --provider / --base-url / --model，也无 RAGKERNEL_SETUP_API_KEY）")
-            return
+        acting = bool(preset_key or new_key or args.base_url is not None or args.model)
+        if not acting:
+            # 无改动意图：当前 provider 可用就保持；不可用（anthropic 缺 key）则 fail-fast——
+            # 别让「装成功但 LLM 一调就挂」。要显式推迟就 --skip provider。
+            if _provider_usable(prov, cur_key):
+                print("provider：保持现状（当前配置可用）")
+                return
+            raise SetupError("当前 provider 不可用（anthropic 缺 API key）；设 RAGKERNEL_SETUP_API_KEY "
+                             "或 --provider，或 --skip provider 显式推迟 provider 配置。")
+
         preset = _PRESETS[preset_key] if preset_key else None
         kind = preset["kind"] if preset else prov.get("kind", "anthropic")
         base = args.base_url if args.base_url is not None else (preset["base_url"] if preset else prov.get("base_url", ""))
         model = args.model or (preset["model"] if preset else prov.get("model"))
 
-        # 切换 provider（显式 --provider）绝不沿用旧 key——否则 MiniMax→Claude 会拿
-        # MiniMax 的 key 去请求 Claude、静默鉴权失败。切换必须带新 key。
-        switching = preset_key is not None
-        if kind != "openai":
-            if switching and not new_key:
+        # 只有**端点**（kind/base_url）变了才算切换：换端点会让旧 key 失效。只改 model 用
+        # 同一端点同一 key 是合法的、不必重输；同一预设幂等重跑也不算切换（endpoint 没变）。
+        endpoint_changed = (kind, base) != (prov.get("kind"), prov.get("base_url"))
+        if endpoint_changed:
+            if new_key:
+                key_to_write = new_key
+            elif kind == "openai":
+                # 切到 openai 没给新 key：写 "EMPTY" 清掉旧云端 key（与 OpenAIBackend 的占位一致），
+                # 绝不把 MiniMax/Claude 的 key 当 bearer 发给新端点。
+                key_to_write = "EMPTY"
+            else:
                 raise SetupError("切换 provider 需要新的 API key：设 RAGKERNEL_SETUP_API_KEY"
                                  "（避免沿用上一个 provider 的 key）")
-            if not new_key and not cur_key:
-                raise SetupError("--yes 配置 provider 需要凭证：设 RAGKERNEL_SETUP_API_KEY（或 --skip provider）")
-        # switching 时上面已保证 anthropic 有 new_key；写 new_key。非切换时空 key = None（保留已存）
-        key_to_write = new_key if switching else (new_key or None)
+        else:
+            # 同端点：给了新 key 就更新，否则保留已存；anthropic 端点连旧 key 都没有才 fail-fast
+            if kind != "openai" and not new_key and not cur_key:
+                raise SetupError("当前 provider 缺凭证：设 RAGKERNEL_SETUP_API_KEY（或 --skip provider）")
+            key_to_write = new_key or None  # None = set_provider_override 保留已存 key
         config.set_provider_override(kind, base, model, int(prov.get("max_tokens", 8000)), key_to_write)
         print(f"provider：已设为 {kind} · {model}")
         return
@@ -125,7 +144,11 @@ def _step_provider(args) -> None:
     choice = _ask("序号", "1")
 
     if choice == str(len(keys) + 1):  # 手动
+        # kind 必须是受支持值——get_backend 把一切非 openai 当 anthropic，typo 会静默走错后端
         kind = _ask("kind (anthropic/openai)", prov.get("kind", "anthropic"))
+        while kind not in ("anthropic", "openai"):
+            print("  kind 只能是 anthropic 或 openai。")
+            kind = _ask("kind (anthropic/openai)", prov.get("kind", "anthropic"))
         base = _ask("base_url", prov.get("base_url", ""))
         model = _ask("model", prov.get("model", ""))
     else:
@@ -134,7 +157,8 @@ def _step_provider(args) -> None:
         base = _ask("base_url", preset["base_url"])
         model = _ask("model", preset["model"])
 
-    switching = (kind, base, model) != (prov.get("kind"), prov.get("base_url"), prov.get("model"))
+    # 端点（kind/base）变了才算切换——旧 key 会失效；只改 model 不算
+    switching = (kind, base) != (prov.get("kind"), prov.get("base_url"))
     hint = "（留空保持现有 key）" if (cur_key and not switching) else ""
     entered = getpass.getpass(f"API key{hint}：").strip()
     api_key = entered or None  # None = set_provider_override 保留已存 key
@@ -184,14 +208,23 @@ def _step_admin(args) -> None:
         print(f"管理员：已存在（{admins[0]['username']}{' 等' if len(admins) > 1 else ''}），跳过。")
         return
 
+    taken = {u["username"] for u in auth.list_users()}  # 含被停用的——create_user 会撞 UNIQUE
     default_user = args.admin_user or _env("USER") or "admin"
     if args.yes or not _interactive():
         username = args.admin_user or default_user
+        if username in taken:
+            # 常见：停用首个 admin 后重跑，默认 $USER 与那个停用账号撞名 → 否则 IntegrityError 未捕获
+            raise SetupError(f"用户名「{username}」已存在（可能是被停用的账号）；用 --admin-user 换个名，"
+                             f"或 `ragkernel users activate <id>` 启用原账号。")
         password = _env("RAGKERNEL_SETUP_ADMIN_PASSWORD")
         if not password:
             raise SetupError("--yes 需要管理员密码：设 RAGKERNEL_SETUP_ADMIN_PASSWORD（或 --skip admin）")
     else:
         username = _ask("管理员用户名", default_user)
+        while not username or username in taken:
+            print(f"  用户名「{username}」不能用（空或已存在，可能被停用）；换一个，"
+                  "或先 `ragkernel users activate <id>` 启用原账号。")
+            username = _ask("管理员用户名", "")
         password = _prompt_password()
 
     auth.create_user(username, password, is_admin=True)
@@ -255,8 +288,10 @@ def _step_token(args) -> None:
     try:
         token = auth.issue_token(uid, ttl_days=365, label="claude-code", token_kind="agent")
     except Exception:
-        print("MCP token：label「claude-code」可能已存在——先 `ragkernel token revoke` 或换 label。")
-        return
+        # 用户明确 --with-token 却没签出来，不能静默返回让 run() 退 0——自动化会把「没拿到凭证」当成功
+        raise SetupError(
+            f"MCP token 签发失败：label「claude-code」可能已存在。先 "
+            f"`ragkernel token revoke claude-code --user {user}` 再重试（该用户若已有可用 token 则无需重签，可 --skip token）。")
 
     # --yes 是自动化模式：即便从 pty（CI 常见）跑、_interactive() 为真，也默认脱敏，
     # 别把长效凭证漏进终端/CI 日志。只有显式 --show-token 才打印完整值。
@@ -279,10 +314,17 @@ def _step_token(args) -> None:
 def _selected(args) -> list[str]:
     steps = list(STEPS)
     if args.only:
-        want = {s.strip() for s in args.only.split(",")}
+        want = {s.strip() for s in args.only.split(",") if s.strip()}
+        # --only admn 这类 typo 会被静默转成空步骤列表 → 假成功退 0；必须拒绝未知名字
+        unknown = want - set(STEPS)
+        if unknown:
+            raise SetupError(f"--only 含未知步骤：{', '.join(sorted(unknown))}（可选：{', '.join(STEPS)}）")
         steps = [s for s in steps if s in want]
     if args.skip:
-        drop = {s.strip() for s in args.skip.split(",")}
+        drop = {s.strip() for s in args.skip.split(",") if s.strip()}
+        unknown = drop - set(STEPS)
+        if unknown:
+            raise SetupError(f"--skip 含未知步骤：{', '.join(sorted(unknown))}（可选：{', '.join(STEPS)}）")
         steps = [s for s in steps if s not in drop]
     return steps
 
