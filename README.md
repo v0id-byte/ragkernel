@@ -8,6 +8,10 @@ Turn engineering documents and CAD models into structured, searchable, and **ver
 
 > RagKernel is a verifiable engineering **knowledge engine** for building evidence-grounded systems over documents, CAD models, and equipment data. Additional engineering formats are planned behind the same ingestion contract.
 
+![RagKernel evidence-grounded engineering chat — a fault-code answer where every field cites its source document, section, and page](docs/assets/screenshot-chat.png)
+
+<sub>Ask in natural language → RagKernel retrieves evidence first, then answers with a per-claim citation back to the source document and section. If it isn't in the corpus, it says so.</sub>
+
 ## Why RagKernel?
 
 RagKernel started as a personal tool.
@@ -17,6 +21,28 @@ While developing embedded systems and designing PCBs, I repeatedly searched thro
 I also found that general-purpose AI assistants often struggled with engineering documents. They could produce plausible answers from datasheets, but those answers were not always grounded in the actual specification or supported by clear evidence.
 
 Traditional RAG pipelines flatten engineering documents into text chunks. RagKernel preserves engineering **structure, evidence, provenance, and geometry** — enabling humans and AI agents to retrieve engineering knowledge that is traceable and verifiable.
+
+## From Documents to Verified Answers
+
+Drop in manuals, tickets, and CAD models; RagKernel indexes them locally and answers questions with citations you can trace back to the source. The same knowledge is available to humans (Web · CLI) and AI agents (MCP).
+
+### Document ingestion
+
+Drag manuals, tickets, or CAD files into the sidebar — PDF, Word, PPT, Markdown, CSV/Excel, and native STEP/STL — and they are chunked, embedded, and indexed automatically, each with its own per-document status.
+
+![RagKernel document ingestion — drag-and-drop upload with automatic indexing and per-document status](docs/assets/screenshot-ingestion.png)
+
+### Knowledge operations
+
+A built-in dashboard tracks the corpus at a glance: documents, chunks, indexed vectors, questions, sessions, and category distribution across the knowledge base.
+
+![RagKernel operations dashboard — corpus stats, source breakdown, and category distribution](docs/assets/screenshot-dashboard.png)
+
+### Administration
+
+Configure the answer model from the admin console — a cloud API (Claude / MiniMax) or a local OpenAI-compatible service (vLLM / Ollama) — alongside user and knowledge-base management. Changes take effect immediately, no restart.
+
+![RagKernel admin console — LLM provider configuration for cloud or local OpenAI-compatible backends](docs/assets/screenshot-admin.png)
 
 ## Capabilities
 
