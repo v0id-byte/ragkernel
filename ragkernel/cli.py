@@ -175,6 +175,19 @@ def main():
     sub.add_parser("models", help="预载/下载本地模型")
     sub.add_parser("serve", help="启动 Web 服务（上传 + 带引用问答）")
 
+    p = sub.add_parser("setup", help="交互式初始化：provider / 首个管理员 / 模型 / MCP token")
+    p.add_argument("--yes", action="store_true", help="全默认、不提问（CI）；缺凭证会非零退出")
+    p.add_argument("--only", help="只跑这些步骤（逗号分隔：provider,admin,models,token）")
+    p.add_argument("--skip", help="跳过这些步骤")
+    p.add_argument("--reset-provider", action="store_true", help="清除 DB 覆盖，退回 settings.yaml")
+    p.add_argument("--with-token", action="store_true", help="签发 MCP agent token（默认不签）")
+    p.add_argument("--provider", choices=["minimax", "claude", "local"], help="非交互指定 provider 预设")
+    p.add_argument("--base-url", default=None, help="覆盖 provider base_url")
+    p.add_argument("--model", default=None, help="覆盖 provider model")
+    p.add_argument("--admin-user", default=None, help="管理员用户名（默认 $USER）")
+    p.add_argument("--no-models", action="store_true", help="不下载模型")
+    p.add_argument("--show-token", action="store_true", help="非交互下也打印完整 token（默认脱敏）")
+
     p = sub.add_parser("doctor", help="环境自查（装完/出问题时跑）")
     p.add_argument("--json", action="store_true", help="机器可读输出（供监控/K8s probe）")
     p.add_argument("--offline", action="store_true", help="跳过所有网络检查")
@@ -238,6 +251,10 @@ def main():
         cmd_mcp(args)
     elif args.cmd == "token":
         cmd_token(args)
+    elif args.cmd == "setup":
+        from . import bootstrap
+
+        sys.exit(bootstrap.run(args))
     elif args.cmd == "doctor":
         from . import doctor
 
