@@ -8,8 +8,6 @@ import socket
 import ssl
 import urllib.error
 
-import pytest
-
 from ragkernel.checks import provider as P
 from ragkernel.checks.provider import (
     AnthropicProbe,
@@ -73,6 +71,27 @@ def test_config_is_readonly_never_creates_settings_db(monkeypatch, tmp_path):
         "api_key_env": "MINIMAX_API_KEY"}, env={"MINIMAX_API_KEY": "k"})
     check_provider_config()
     assert not (tmp_path / "settings.db").exists()
+
+
+def test_config_unknown_kind_fails(monkeypatch, tmp_path):
+    """kind: opeani 这类 typo——backends 把一切非 openai 当 anthropic，会静默走错后端。
+    有 key、看似配好，却在真 generate 时炸。必须在 config 层拦下。"""
+    _set_provider(monkeypatch, tmp_path, {
+        "kind": "opeani", "model": "m", "base_url": "https://x",
+        "api_key_env": "MINIMAX_API_KEY"}, env={"MINIMAX_API_KEY": "k"})
+    r = check_provider_config()
+    assert r.status == "failed" and r.severity == "error"
+    assert "opeani" in r.summary
+
+
+def test_config_unsupported_scheme_fails(monkeypatch, tmp_path):
+    """htps:// 这类 scheme typo——否则被当非 https 落到 80 端口裸连、看似通。"""
+    _set_provider(monkeypatch, tmp_path, {
+        "kind": "openai", "model": "m", "base_url": "htps://api.openai.com/v1",
+        "api_key_env": "VLLM_API_KEY"})
+    r = check_provider_config()
+    assert r.status == "failed"
+    assert "scheme" in r.summary
 
 
 # ------------------------------------------------------------------ network
@@ -186,6 +205,54 @@ def test_network_unparseable_base_url(monkeypatch, tmp_path):
     assert r.status == "failed"
 
 
+def test_network_unsupported_scheme_fails(monkeypatch, tmp_path):
+    """htps:// 不能当 http 裸连放行——SDK 根本用不了这个 URL。"""
+    _set_provider(monkeypatch, tmp_path, {
+        "kind": "openai", "base_url": "htps://api.openai.com/v1", "model": "m", "api_key_env": "X"})
+    monkeypatch.setattr(P, "_proxy_for", lambda s, h: None)
+    r = check_provider_network()
+    assert r.status == "failed"
+    assert "scheme" in r.summary
+
+
+def test_network_proxy_407_is_failure_not_reachable(monkeypatch, tmp_path):
+    """407 来自代理（要鉴权），不是目标响应——说明根本没到目标，不能算连通。
+    否则 network 通过、auth 因非必需被跳过，doctor 会在 provider 实际不可达时报 healthy。"""
+    import urllib.error
+
+    _set_provider(monkeypatch, tmp_path, {
+        "kind": "anthropic", "base_url": "https://api.example.com", "model": "m", "api_key_env": "X"})
+    monkeypatch.setattr(P, "_proxy_for", lambda s, h: "http://user:secret@corp-proxy:3128")
+
+    def raise_407(req, timeout):
+        raise urllib.error.HTTPError(req.full_url, 407, "Proxy Auth Required", {}, None)
+    monkeypatch.setattr("urllib.request.urlopen", raise_407)
+
+    r = check_provider_network()
+    assert r.status == "failed"
+    assert "407" in r.summary
+    # 代理凭证绝不泄漏（summary 与 meta 都不能含）
+    assert "secret" not in r.summary
+    assert "secret" not in str(r.meta)
+
+
+def test_network_proxy_credentials_sanitized_on_success(monkeypatch, tmp_path):
+    _set_provider(monkeypatch, tmp_path, {
+        "kind": "anthropic", "base_url": "https://api.example.com", "model": "m", "api_key_env": "X"})
+    monkeypatch.setattr(P, "_proxy_for", lambda s, h: "http://alice:hunter2@corp-proxy:3128")
+    monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout: None)  # 成功
+
+    r = check_provider_network()
+    assert r.status == "passed"
+    assert "hunter2" not in str(r.summary) + str(r.meta)
+    assert r.meta["proxy"] == "http://corp-proxy:3128"
+
+
+def test_sanitize_proxy_strips_credentials():
+    assert P._sanitize_proxy("http://user:pass@proxy:8080") == "http://proxy:8080"
+    assert P._sanitize_proxy("http://proxy:8080") == "http://proxy:8080"
+
+
 # ------------------------------------------------------------------ auth（零成本，绝不计费）
 
 def _probe_returning(status):
@@ -213,15 +280,24 @@ def test_auth_401_is_error(monkeypatch):
 
 
 def test_auth_no_zerocost_endpoint_is_skipped_not_charged(monkeypatch):
-    """provider 没有零成本鉴权端点时跳过（留给 setup 做完整验证），绝不降级去计费。"""
-    p = AnthropicProbe("https://api.minimaxi.com/anthropic", "key")
-
-    def raise_nozerocost():
-        raise P._NoZeroCostEndpoint
-    monkeypatch.setattr(p, "_probe", raise_nozerocost)
+    """openai 兼容的 /v1/models 是标准端点：404 说明 base 路径写错（如 /v2），
+    绝不能当「无端点」静默跳过——真 generate 会用同一 base 一样失败。→ 硬错误。"""
+    p = OpenAICompatibleProbe("http://x/v2", "key")
+    monkeypatch.setattr(p, "_get_status", lambda url, h: 404)
     r = p.check_auth()
-    assert r.status == "skipped"
-    assert r.meta["verified"] is False
+    assert r.status == "failed" and r.severity == "error"
+    assert "路径" in r.summary
+    assert r.meta["charged_request"] is False   # 仍然绝不计费
+
+
+def test_anthropic_404_is_warning_not_silent_pass(monkeypatch):
+    """anthropic 兼容端点可用性不一：404 降级为 warning（degraded），
+    既不误判 unhealthy、也不静默放行成 healthy。"""
+    p = AnthropicProbe("https://api.minimaxi.com/anthropic", "key")
+    monkeypatch.setattr(p, "_get_status", lambda url, h: 404)
+    r = p.check_auth()
+    assert r.status == "failed" and r.severity == "warning"
+    assert r.meta["charged_request"] is False
 
 
 def test_auth_network_error_defers_to_network_check(monkeypatch):
@@ -234,13 +310,6 @@ def test_auth_network_error_defers_to_network_check(monkeypatch):
     r = p.check_auth()
     assert r.status == "skipped"
     assert "网络" in r.summary
-
-
-def test_openai_probe_404_means_no_zerocost(monkeypatch):
-    p = OpenAICompatibleProbe("http://x/v1", "key")
-    monkeypatch.setattr(p, "_get_status", lambda url, h: 404)
-    with pytest.raises(P._NoZeroCostEndpoint):
-        p._probe()
 
 
 def test_auth_selects_probe_by_kind(monkeypatch, tmp_path):

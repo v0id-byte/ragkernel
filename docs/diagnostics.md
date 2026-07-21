@@ -128,14 +128,24 @@ code   = policy.exit_code(results)
 
 `provider.config → provider.network → provider.auth` 分层归因，让「LLM 用不了」精确到哪一层：
 
-- **config**（required，纯逻辑）：配置齐不齐、key 从哪来。`meta.source` 报清每个字段来自
-  DB 覆盖还是 yaml、key 来自 override 还是 `env:<名字>`——企业最常见的坑是「配了但来源对不上」。
+- **config**（required，纯逻辑）：配置齐不齐、key 从哪来、**配了但配错没有**。`meta.source` 报清
+  每个字段来自 DB 覆盖还是 yaml、key 来自 override 还是 `env:<名字>`——企业最常见的坑是「配了但
+  来源对不上」（`api_key_env` 指向的变量名写错）。还拦截两类会被运行时静默误解的错配：未知
+  `kind`（`opeani` 会被 `get_backend` 当成 anthropic 走错后端）、不支持的 `base_url` scheme
+  （`htps://` 会被当非 https 落到 80 端口）。
 - **network**（required）：纯 socket + TLS，**不碰 LLM SDK**（SDK 缺 key 会 raise，会把「没填 key」
-  误报成「网络不通」）；`https` 必带 SNI + 证书校验。措辞只说「TCP/TLS 可达」，不说「API 可达」——
-  路径写错（`/v1`→`/v2`）时 TCP/TLS 照样通，那留给 auth 暴露。检测到代理时改走代理测真实路径。
+  误报成「网络不通」）；`https` 必带 SNI + 证书校验；不支持的 scheme 直接判失败、不当 http 裸连。
+  措辞只说「TCP/TLS 可达」，不说「API 可达」——路径写错（`/v1`→`/v2`）时 TCP/TLS 照样通，那留给
+  auth 暴露。检测到代理时改走代理测真实路径；代理返回 **407** 是代理鉴权失败（没到目标）→ 判失败，
+  不当连通；代理 URL 里的 `user:pass@` 凭证在输出前一律脱敏。
 - **auth**（**非 required，尽力而为**）：只用零成本端点（`GET /models`）验证凭证，**doctor 绝不发计费请求**。
-  provider 没有这种端点时 `skipped`（留给 `ragkernel setup` 做一次带最小推理的完整验证）——因为它
-  非 required，skipped 不会把整体顶成 unknown。但真鉴权失败（401/403）仍是 `failed/error`、照常计入健康。
+  - `200` → 凭证有效；`401/403` → `failed/error`（key 无效/过期）。
+  - `404` **不静默跳过**——真 SDK generate 会用同一个 `base_url` 一样失败。openai 兼容的 `/v1/models`
+    是标准端点，404 判 `error`（base 路径大概率写错，如 `/v2`）；anthropic 兼容端点可用性不一，
+    404 只降级 `warning`（degraded），既不误判 unhealthy 也不静默放行 healthy。
+  - 网络错 → `skipped`（归因让给 provider · network，避免两条错误）；其它异常状态（5xx 等）→ `skipped`
+    （确实无法判定）。因 auth 非 required，skipped 不会把整体顶成 unknown；但上面的 `failed` 仍按
+    severity 计入健康。
 
 依赖按**字段**判定、不按上一步 result 短路：没填 key 时 network 照跑（它只要 base_url），
 用户于是只看到**一条** config 错误、而网络归因仍准确。
