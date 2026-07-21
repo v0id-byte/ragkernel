@@ -36,12 +36,15 @@ def _results():
 
 
 def _required_passing():
-    """DEFAULT_POLICY 要求的检查全部 passed——真实 run() 一定会返回这三项。
-    断言退出码的测试必须包含它们，否则「缺席 required → unknown」会盖过被测行为。"""
+    """DEFAULT_POLICY 要求的检查全部 passed。断言退出码的测试必须包含它们，
+    否则「缺席 required → unknown」会盖过被测行为。provider.auth 不在 required 里
+    （尽力而为），故不必列。"""
     return [
         passed("python", "runtime", "Python 版本", "3.12.8"),
         passed("sqlite", "storage", "sqlite-vec 扩展", "可加载"),
         passed("storage", "storage", "数据目录", "可写"),
+        passed("provider.config", "provider", "provider · config", "anthropic · MiniMax-M3"),
+        passed("provider.network", "provider", "provider · network", "TCP/TLS 可达"),
     ]
 
 

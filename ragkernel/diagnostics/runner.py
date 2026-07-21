@@ -26,9 +26,9 @@ class CheckSpec:
 def _registry() -> list[CheckSpec]:
     # 顺序显式固定：doctor 的输出就是产品体验，不能因为 import 顺序变了就漂移。
     # 函数内导入，保持 cli.py 那套「重依赖惰性加载」的约定。
-    from ..checks import runtime, storage
+    from ..checks import provider, runtime, storage
 
-    return [*runtime.CHECKS, *storage.CHECKS]
+    return [*runtime.CHECKS, *storage.CHECKS, *provider.CHECKS]
 
 
 def run(*, offline: bool = False, minimal: bool = False) -> list[CheckResult]:
@@ -36,24 +36,24 @@ def run(*, offline: bool = False, minimal: bool = False) -> list[CheckResult]:
     for spec in _registry():
         if minimal and not spec.minimal:
             continue
-        if offline and spec.network:
-            results.append(CheckResult(
-                id=spec.id, category=spec.category, title=spec.title,
-                status="skipped", summary="--offline：跳过网络检查",
-            ))
-            continue
 
         t0 = monotonic()
-        try:
-            r = spec.fn()
-        except Exception as e:
-            # 异常类型进 meta 供 --verbose 显示；不放 traceback，避免泄漏路径
+        if offline and spec.network:
             r = CheckResult(
                 id=spec.id, category=spec.category, title=spec.title,
-                status="failed", severity="error",
-                summary=f"检查本身崩溃：{type(e).__name__}",
-                meta={"exception_type": type(e).__name__, "exception": repr(e)},
+                status="skipped", summary="--offline：跳过网络检查",
             )
+        else:
+            try:
+                r = spec.fn()
+            except Exception as e:
+                # 异常类型进 meta 供 --verbose 显示；不放 traceback，避免泄漏路径
+                r = CheckResult(
+                    id=spec.id, category=spec.category, title=spec.title,
+                    status="failed", severity="error",
+                    summary=f"检查本身崩溃：{type(e).__name__}",
+                    meta={"exception_type": type(e).__name__, "exception": repr(e)},
+                )
         r.duration_ms = int((monotonic() - t0) * 1000)
         results.append(r)
     return results

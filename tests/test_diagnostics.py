@@ -188,13 +188,14 @@ def test_minimal_runs_only_preflight_subset(monkeypatch):
 
 
 def test_every_result_is_timed():
-    for r in run():
+    # offline：provider 检查会发真实网络请求，测试里一律跳过
+    for r in run(offline=True):
         assert r.duration_ms is not None and r.duration_ms >= 0
 
 
 def test_check_order_is_stable():
     """doctor 的输出就是产品体验，顺序不能因为重构 import 就漂移。"""
-    assert [r.id for r in run()] == [r.id for r in run()]
+    assert [r.id for r in run(offline=True)] == [r.id for r in run(offline=True)]
 
 
 # ---------------------------------------------------------------- 依赖方向
@@ -208,7 +209,7 @@ def test_checks_do_not_import_huggingface():
     """
     code = (
         "import sys;"
-        "import ragkernel.checks.runtime, ragkernel.checks.storage;"
+        "import ragkernel.checks.runtime, ragkernel.checks.storage, ragkernel.checks.provider;"
         "import ragkernel.diagnostics;"
         "leaked=[m for m in sys.modules if 'huggingface' in m or 'torch' in m];"
         "print(leaked);"
@@ -223,7 +224,7 @@ def test_default_policy_only_requires_existing_checks():
     每台干净机器误报成 UNKNOWN。provider.* 在 provider 检查落地那个 PR 才加入。"""
     from ragkernel.diagnostics import run
 
-    registered = {r.id for r in run()}
+    registered = {r.id for r in run(offline=True)}  # offline 也会返回全部 id（网络项为 skipped）
     assert DEFAULT_POLICY.required <= registered, (
         f"required 里有未注册的检查: {DEFAULT_POLICY.required - registered}"
     )
