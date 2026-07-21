@@ -77,3 +77,20 @@ ragkernel setup --with-token       # 顺带签发 MCP agent token
 
 向导启动即对 `.ragkernel/setup.lock` 上文件锁（`flock`），第二个进程拿不到就退出。用文件锁
 而非 SQLite 锁——首次安装时 `auth.db` 可能还不存在。
+
+---
+
+## 本地 / 私有化部署选型
+
+嵌入（bge-m3）+ 重排（bge-reranker-v2-m3）本来就全本地跑；只有**生成**这一步走 provider。
+私有化时用 `kind: openai` 接任意 **OpenAI 兼容** serving——本地引擎几乎都是这个协议：
+
+- **serving**：推荐 [vLLM](https://github.com/vllm-project/vllm)（吞吐/并发好）；轻量可用
+  Ollama / Xinference。信创/国产卡走 vLLM-Ascend 等对应分支。
+- **模型档位**（可靠多步 tool-use 是主要瓶颈）：
+  - **甜点 32B** —— Qwen3-32B AWQ/INT4，单张 ~48G 卡（L40S / A6000）即可。
+  - **预算档 14B** —— 24G 卡（RTX 4090）。更小的模型合同/多步 tool-use 明显变弱。
+- **配置**：`base_url` 指向你的 serving（如 `http://localhost:8000/v1`）、`model` 填 serving
+  暴露的模型名、key 任意非空（本地引擎通常忽略，用 `EMPTY` 占位）。
+
+嵌入/重排模型的缓存路径与完整性说明见 [diagnostics.md](diagnostics.md) 的「本地模型检查」。
