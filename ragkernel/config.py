@@ -110,9 +110,14 @@ def provider(readonly: bool = False) -> dict:
     prov.setdefault("api_key_env", "ANTHROPIC_API_KEY")
     prov.setdefault("max_tokens", 8000)
     override = get_provider_override_ro() if readonly else get_provider_override()
-    for k in ("kind", "base_url", "model"):
+    for k in ("kind", "model"):
         if override.get(k):
             prov[k] = override[k]
+    # base_url 特殊：空串是**有意义**的（官方 Claude 用空 base_url = SDK 默认 host）。
+    # 用 `is not None` 区分「显式设空」与「NULL/未设」——否则选官方 Claude 时，
+    # 已存的非空 base_url（如上一个 MiniMax 覆盖）清不掉，请求仍打到旧 host。
+    if override.get("base_url") is not None:
+        prov["base_url"] = override["base_url"]
     if override.get("max_tokens"):
         prov["max_tokens"] = override["max_tokens"]
     if override.get("api_key"):

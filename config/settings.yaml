@@ -4,6 +4,8 @@ data_dir: data
 
 # LLM provider —— provider 无关。kind=anthropic（Claude/MiniMax）| openai（vLLM/Ollama/本地）。
 # 默认 MiniMax（零成本，开箱即用）。
+# ⚠️ 优先级：data/settings.db 的运行时覆盖（ragkernel setup / /admin 写）> 这里的 yaml。
+#    「改了 yaml 不生效」多半是有 DB 覆盖——`ragkernel setup --reset-provider` 可清。详见 docs/configuration.md。
 #   Claude:      kind: anthropic, base_url: "", model: claude-sonnet-5, api_key_env: ANTHROPIC_API_KEY
 #   本地 vLLM:   kind: openai, base_url: http://localhost:8000/v1, model: Qwen3-32B-AWQ, api_key_env: VLLM_API_KEY
 #                （私有化：本地引擎几乎都是 OpenAI 兼容；embedding+重排本来就全本地）
