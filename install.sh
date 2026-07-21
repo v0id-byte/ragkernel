@@ -106,7 +106,8 @@ clone_ref() {
   fi
 }
 
-if [ ! -e "$DIR" ]; then
+# 目录不存在，或存在但为空（如 /opt/ragkernel 预建好授权）——都当 clone 处理：git clone 接受空目录
+if [ ! -e "$DIR" ] || { [ -d "$DIR" ] && [ -z "$(ls -A "$DIR" 2>/dev/null)" ]; }; then
   say "clone → $DIR"
   if [ -n "$REF" ]; then clone_ref; else git clone --depth 1 "$REPO" "$DIR"; fi
 elif [ -d "$DIR/.git" ]; then
@@ -115,8 +116,18 @@ elif [ -d "$DIR/.git" ]; then
     || die "$DIR 已存在但不是 ragkernel（origin=$ORIGIN）；换个目录：--dir <路径>"
   if [ "$UPDATE" -eq 1 ]; then
     if [ -n "$REF" ]; then
-      git -C "$DIR" fetch --tags --force
-      git -C "$DIR" checkout "$REF" || die "未知 ref：$REF"
+      # 浅克隆要先加深，否则老 commit / 分支新 tip 取不到（checkout 报 reference is not a tree）
+      if [ -f "$DIR/.git/shallow" ]; then
+        git -C "$DIR" fetch --unshallow --tags origin 2>/dev/null || git -C "$DIR" fetch --tags origin
+      else
+        git -C "$DIR" fetch --tags --force origin
+      fi
+      # 分支 ref → 推进到远端 tip（否则 checkout 只停在旧 commit）；tag/commit → 直接 checkout
+      if git -C "$DIR" show-ref --verify --quiet "refs/remotes/origin/$REF"; then
+        git -C "$DIR" checkout -B "$REF" "origin/$REF"
+      else
+        git -C "$DIR" checkout "$REF" || die "未知 ref：$REF"
+      fi
     elif ! BRANCH="$(git -C "$DIR" symbolic-ref --short -q HEAD)"; then
       say "detached HEAD @ $(git -C "$DIR" describe --tags --always 2>/dev/null)，跳过更新"
     else
@@ -194,5 +205,8 @@ if [ -z "${NO_SETUP:-}" ] && stty -a </dev/tty >/dev/null 2>&1; then
   printf '\n== 进入配置向导（ragkernel setup）==\n'
   "$UV" run --directory "$DIR" ragkernel setup < /dev/tty
 else
-  printf '\nNext: cd %s && uv run ragkernel setup\n' "$DIR"
+  # uv 可能刚装到 ~/.local/bin、还没进当前 shell 的 PATH——PATH 里没有就打印发现到的绝对路径，
+  # 保证这条 Next 命令复制即可用（否则 `uv run` 会 command not found）。
+  if command -v uv >/dev/null 2>&1; then RUN=uv; else RUN="$UV"; fi
+  printf '\nNext: cd %s && %s run ragkernel setup\n' "$DIR" "$RUN"
 fi
