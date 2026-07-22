@@ -2,6 +2,7 @@
 name = "ragkernel"
 version = "0.1.0"
 description = "Verifiable engineering knowledge engine for documents, CAD models, humans, and AI agents"
+license = { file = "LICENSE" }
 requires-python = ">=3.12,<3.14"  # onnxruntime(RapidOCR 依赖)暂无 cp314 轮子，封顶避免 uv 选到 3.14 装不上
 dependencies = [
     "anthropic>=0.40",

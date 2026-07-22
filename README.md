@@ -307,3 +307,16 @@ docs/                                                  # configuration.md · dia
 > Structured engineering data is preserved whenever possible rather than flattened into free text.
 >
 > AI agents should retrieve engineering evidence, not fabricate engineering facts.
+
+## License / 许可
+
+RagKernel is licensed under the **Business Source License 1.1 (BSL 1.1)** — a source-available license. The full text is in [`LICENSE`](LICENSE).
+
+You may use, modify, self-host, and deploy RagKernel for personal, educational, research, and internal business purposes, and you may build consulting, integration, and custom-development work on top of it. Commercial hosted or managed services offered to third parties require a separate commercial license.
+
+On the Change Date (**2029-07-21**) each released version automatically converts to the **Apache License, Version 2.0**.
+
+RagKernel 采用 **Business Source License 1.1（源码可见协议）**，完整条款见 [`LICENSE`](LICENSE)。允许个人、教育、研究与企业内部使用，可自托管、修改，并可基于本项目提供咨询、集成与定制开发；面向第三方的商业化托管 / 托管代运营服务需另行获得商业授权。到 Change Date（**2029-07-21**）后，各已发布版本自动转为 **Apache License 2.0**。
+
+RagKernel is created and maintained by v0id-byte.
+Copyright ownership is held by Liuhaoran Qin.
