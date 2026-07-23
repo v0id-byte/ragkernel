@@ -429,6 +429,106 @@ def test_oversized_manifest_is_rejected(root, monkeypatch):
     assert st.available is False, "拒绝解析后不能报出可升级"
 
 
+def test_non_object_manifest_does_not_crash(root, monkeypatch):
+    """配错地址指到某个数组接口、或 CDN 返回 JSON 包装的错误页：合法 JSON 但不是对象。
+    下游 .get() 会抛 AttributeError 逃出 check()，把「非致命的版本检查」变成
+    `ragkernel update` / `version` 直接崩溃。企业自建 mirror 配错是可预期的。"""
+    class FakeResp:
+        headers = {}
+
+        def read(self, n=-1):
+            return b'["not", "an", "object"]'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(update.urllib.request, "urlopen", lambda req, timeout=None: FakeResp())
+    st = update.check(force=True)
+    assert st.error and "不是 JSON 对象" in st.error
+    assert st.available is False
+    update.summary()   # 不得抛
+
+
+def test_corrupt_cached_manifest_does_not_crash(root, monkeypatch):
+    update._cache_write({"checked_at": update._now(), "etag": None,
+                         "manifest": ["bad"], "error": None})
+    monkeypatch.setattr(update, "_fetch", lambda e, t: (None, None))
+    assert update.check(force=True).latest is None
+
+
+def test_unwritable_cache_is_not_fatal(root, monkeypatch):
+    """只读安装目录 / 只读容器：缓存写不下去只是「下次还得重查」，
+    不该让 ragkernel update 或 doctor 整个崩掉。"""
+    monkeypatch.setattr(update, "_fetch", lambda e, t: (_manifest(version="9.9.9"), "e"))
+
+    def boom(data):
+        raise PermissionError("read-only file system")
+
+    monkeypatch.setattr(update, "_cache_write", boom)
+    st = update.check(force=True)
+    assert st.latest == "9.9.9", "拿到的结果仍要能用"
+    assert "缓存写入失败" in st.error
+
+
+def test_gate_blocks_when_target_python_too_old(root, monkeypatch):
+    """闸门原先读了 requires.python 却从不判定：3.12 装机遇到 requires >=3.13 会通过
+    预检、进维护态，然后才在 uv sync 里失败——正是闸门要避免的那条路径。"""
+    config.rk_path("state", "install.json", create=True).write_text(
+        json.dumps({"schema_version": 2, "python": "3.12"}), encoding="utf-8")
+    m = _manifest(requires={"python": ">=3.13", "ragkernel_schema": config.SCHEMA_VERSION,
+                            "min_upgradable_from": "0.0.1"})
+    r = update.can_upgrade(m)
+    assert not r.allowed
+    assert [b["type"] for b in r.blockers] == ["python"]
+    assert r.blockers[0]["current"] == "3.12"
+
+
+def test_gate_uses_install_target_python_not_the_interpreter(root):
+    """判定要针对 install.sh 将要装的那个 Python（记在 install.json），
+    不是当前解释器——两者可以不同。"""
+    config.rk_path("state", "install.json", create=True).write_text(
+        json.dumps({"python": "3.12"}), encoding="utf-8")
+    assert update._install_python() == "3.12"
+
+
+def test_gate_ignores_unparsable_python_spec(root):
+    """specifier 或版本串不合法时不拦——交给 installer 兜底，别让预检自己成为故障点。"""
+    m = _manifest(requires={"python": "not-a-specifier",
+                            "ragkernel_schema": config.SCHEMA_VERSION,
+                            "min_upgradable_from": "0.0.1"})
+    assert update.can_upgrade(m).allowed
+
+
+def test_restart_hint_names_the_managed_service(root, monkeypatch):
+    """ragkernel upgrade 通常是运维在交互 shell 里敲的，那个进程没有 INVOCATION_ID、
+    会被判成 process。若就此说「手动重启即可」，真正在跑旧代码的**服务**进程没人动。"""
+    monkeypatch.setattr(update, "runtime_mode", lambda: "process")
+    monkeypatch.setattr(update, "managed_unit", lambda: "ragkernel.service")
+    handled, cmd = update.restart_hint()
+    assert handled == "manual-service"
+    assert cmd == "sudo systemctl restart ragkernel.service"
+
+
+def test_restart_hint_falls_back_when_no_service(root, monkeypatch):
+    monkeypatch.setattr(update, "runtime_mode", lambda: "process")
+    monkeypatch.setattr(update, "managed_unit", lambda: None)
+    assert update.restart_hint() == ("manual", "ragkernel serve")
+
+
+def test_restart_hint_when_we_are_the_unit(root, monkeypatch):
+    """本进程就是那个单元时，退出即被 Restart=always 拉起，不必给命令。"""
+    monkeypatch.setattr(update, "runtime_mode", lambda: "systemd")
+    assert update.restart_hint()[0] == "systemd"
+
+
+def test_managed_unit_is_none_off_linux(root, monkeypatch):
+    monkeypatch.setattr(update.platform, "system", lambda: "Darwin")
+    assert update.managed_unit() is None
+
+
 def test_apply_refuses_when_another_upgrade_is_in_flight(root, monkeypatch):
     _fake_executor(monkeypatch)
     update.transition("draining", update_id="u_other")
@@ -613,6 +713,19 @@ def test_doctor_json_never_touches_the_network(root, monkeypatch):
     d = json.loads(doctor.render_json([passed("a", "runtime", "t")],
                                       HealthPolicy(required=set()), verbose=False))
     assert d["update"]["latest"] == "99.0.0"
+
+
+def test_doctor_update_flag_respects_offline(root, monkeypatch):
+    """air-gap 机器上跑 `doctor --update --offline` 收集支持信息是可预期用法。
+    强制刷新排在 runner 的 offline 跳过之前，会真的发一次 GET 并等满超时。"""
+    from types import SimpleNamespace
+
+    from ragkernel import doctor
+
+    monkeypatch.setattr(update, "_fetch", lambda e, t: pytest.fail("--offline 下不得联网"))
+    monkeypatch.setattr(doctor.diagnostics, "run", lambda **kw: [])
+    args = SimpleNamespace(json=False, offline=True, strict=False, verbose=False, update=True)
+    doctor.main(args)
 
 
 def test_cached_status_does_not_fetch(root, monkeypatch):

@@ -83,8 +83,10 @@ def _force_https():
         return redirect(request.url.replace("http://", "https://", 1), code=301)
 
 
-# 维护窗口里仍必须放行的路径。**运维与探针绝不能在升级时变瞎**——那正是最需要它们的时刻。
-_MAINTENANCE_ALLOW = ("/health", "/api/system/info", "/api/version", "/static/")
+# 维护窗口里挡掉的**只有**这两条重活。用「拦截清单」而不是「放行清单」：
+# /health、静态资源、以及将来的只读信息端点全都默认放行——**运维与探针绝不能在升级时
+# 变瞎**，那正是最需要它们的时刻。反过来写（默认拦、列白名单）迟早会漏掉某个探针路径。
+_MAINTENANCE_BLOCK = ("/api/ask", "/api/upload")
 
 
 @app.before_request
@@ -96,9 +98,7 @@ def _maintenance_gate():
     """
     from . import update
 
-    if request.path.startswith(_MAINTENANCE_ALLOW) or request.path in _MAINTENANCE_ALLOW:
-        return None
-    if request.path not in ("/api/ask", "/api/upload"):
+    if request.path not in _MAINTENANCE_BLOCK:
         return None
     mt = update.maintenance()
     if not mt:

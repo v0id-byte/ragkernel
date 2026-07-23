@@ -230,7 +230,14 @@ def cmd_upgrade(args):
     if res["restart_handled_by"] == "systemd":
         print("退出进程，交给 systemd 拉起…")
         sys.exit(0)
-    print("请重启进程使其生效：ragkernel serve")
+    if res["restart_handled_by"] == "manual-service":
+        # 本进程只是运维敲的 CLI，真正跑旧代码的是那个被管理的服务——不点名的话
+        # 用户很容易以为「升级完了」，而服务还在用内存里的旧代码。
+        print("⚠ 检测到本机由 systemd 管理 ragkernel 服务，但本次升级不是它跑的。")
+        print(f"  代码已换，**服务仍在跑旧代码**，需要重启它才生效：\n  {res['restart_command']}")
+        print("  在此之前服务保持维护态（/api/ask 与 /api/upload 返回 503）。")
+        return 0
+    print(f"请重启进程使其生效：{res['restart_command']}")
     return 0
 
 

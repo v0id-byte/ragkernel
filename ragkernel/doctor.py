@@ -150,8 +150,10 @@ def render_json(results: list[CheckResult], policy: HealthPolicy, *, verbose: bo
 
 
 def main(args) -> int:
-    if getattr(args, "update", False):
-        # 强制刷新版本缓存后再出报告——支持场景里要的是"现在"的结论，不是 6 小时前的
+    if getattr(args, "update", False) and not args.offline:
+        # 强制刷新版本缓存后再出报告——支持场景里要的是"现在"的结论，不是 6 小时前的。
+        # **但 --offline 一票否决**：air-gap 机器上跑 `doctor --update --offline` 收集
+        # 支持信息是可预期用法，这里发一次 GET 会等满超时，且直接违反 --offline 的契约。
         from . import update as _update
 
         _update.check(force=True)
