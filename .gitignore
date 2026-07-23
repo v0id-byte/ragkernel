@@ -1,7 +1,9 @@
 .env
 data/
-# 安装指纹(install.json) + setup 并发锁：部署元数据，与 data/ 的运行数据分开
+# 部署元数据（state/ 安装与升级状态、cache/ 版本检查缓存、locks/ 并发锁），与 data/ 的运行数据分开
 .ragkernel/
+# 本地跑 gen_manifest.py 的产物；正式 manifest 由 release workflow 生成
+dist/
 eval/eval_out/
 __pycache__/
 *.pyc

@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ragkernel.dev/schemas/manifest-v1.json",
+  "title": "RagKernel channel manifest v1",
+  "description": "升级客户端查询的版本清单。官方由 CI 生成；企业自建 endpoint 可照此校验自己的产物，而不必等客户端解析失败才发现写错。消费方必须忽略未知字段——新增字段不算破坏性变更。",
+  "type": "object",
+  "required": ["schema_version", "channel", "version", "tag", "url", "published_at", "generated_at", "requires", "upgrade_strategy"],
+  "additionalProperties": true,
+  "properties": {
+    "$schema": { "type": "string" },
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "字段结构不兼容变化时才 +1。"
+    },
+    "channel": { "type": "string", "examples": ["stable"] },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$",
+      "description": "semver。必须等于 tag 去掉前导 v，也必须等于该 tag 上 pyproject 的 version。"
+    },
+    "tag": { "type": "string", "pattern": "^v" },
+    "url": { "type": "string", "format": "uri" },
+    "notes_url": { "type": "string", "format": "uri" },
+    "published_at": {
+      "type": "string",
+      "description": "版本发布时刻。与 generated_at 分开——两者之差能区分 CDN/代理/本地缓存导致的陈旧。"
+    },
+    "generated_at": { "type": "string", "description": "这份 manifest 文件的生成时刻。" },
+    "requires": {
+      "type": "object",
+      "required": ["python", "ragkernel_schema", "min_upgradable_from"],
+      "properties": {
+        "python": { "type": "string", "description": "PEP 440 版本约束。提示层——真正把关的是 installer 与 pyproject 的 requires-python。" },
+        "ragkernel_schema": { "type": "integer", "description": "本版要求的数据形态版本，对应 ragkernel.config.SCHEMA_VERSION。" },
+        "min_upgradable_from": { "type": "string", "description": "低于此版本不能直升，需先升到中间版本。" }
+      }
+    },
+    "upgrade_strategy": {
+      "type": "object",
+      "required": ["restart_required", "migration_required"],
+      "properties": {
+        "restart_required": { "type": "boolean" },
+        "migration_required": { "type": "boolean" },
+        "estimated_downtime_seconds": { "type": ["integer", "null"] }
+      }
+    },
+    "min_client_version": { "type": ["string", "null"], "description": "早于此版本的独立客户端与本服务端不兼容。" },
+    "security": {
+      "enum": [null, "low", "critical"],
+      "description": "critical 时客户端应把「有新版本」从 warning 升为 error。"
+    },
+    "signature": { "type": ["string", "null"], "description": "预留：manifest 签名。" },
+    "key_id": { "type": ["string", "null"], "description": "预留：签名密钥标识。" }
+  }
+}

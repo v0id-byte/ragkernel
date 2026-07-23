@@ -11,7 +11,7 @@
   管理员密码读 `RAGKERNEL_SETUP_ADMIN_PASSWORD` 或交互 getpass。
 - `--yes` **缺凭证就 fail-fast 非零退出**，不静默跳过——否则 CI 显示成功、服务启动即挂。
   「存在」判定必须是**非空**（`RAGKERNEL_SETUP_API_KEY=""` 是常见 CI 事故）。
-- 并发用 `.ragkernel/setup.lock` **文件锁**（不用 SQLite 锁——首次装时 auth.db 可能还不存在）。
+- 并发用 `.ragkernel/locks/setup.lock` **文件锁**（不用 SQLite 锁——首次装时 auth.db 可能还不存在）。
 - 明文 token 只在交互式 tty 打印；`--yes`/非 tty 默认脱敏，需 `--show-token` 才出。
 """
 
@@ -351,9 +351,7 @@ def run(args) -> int:
         print("已清除 provider 运行时覆盖，回退到 config/settings.yaml。")
         return 0
 
-    lockdir = config.ROOT / ".ragkernel"
-    lockdir.mkdir(exist_ok=True)
-    fp = open(lockdir / "setup.lock", "w")
+    fp = open(config.rk_path("locks", "setup.lock", create=True), "w")
     try:
         fcntl.flock(fp, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:

@@ -93,6 +93,7 @@ def test_manual_install_reported_not_errored(tmp_path, monkeypatch):
 
 
 def test_install_manifest_is_reported(tmp_path, monkeypatch):
+    """v1 的平铺路径——存量安装升级前还是这个样子，必须照常读得到。"""
     monkeypatch.setattr("ragkernel.config.ROOT", tmp_path)
     (tmp_path / ".ragkernel").mkdir()
     (tmp_path / ".ragkernel" / "install.json").write_text(
@@ -101,6 +102,20 @@ def test_install_manifest_is_reported(tmp_path, monkeypatch):
     out = doctor.render_text([passed("a", "runtime", "t")],
                              HealthPolicy(required=set()), verbose=False)
     assert "v0.4.0" in out
+
+
+def test_install_manifest_read_from_state_dir(tmp_path, monkeypatch):
+    """install.sh 迁移后指纹落在 .ragkernel/state/ 下，doctor 要跟着走新路径。"""
+    from ragkernel import config
+
+    monkeypatch.setattr("ragkernel.config.ROOT", tmp_path)
+    config.rk_path("state", "install.json", create=True).write_text(
+        json.dumps({"schema_version": 2, "ref": "v0.5.0", "installer": "install.sh"}),
+        encoding="utf-8")
+
+    out = doctor.render_text([passed("a", "runtime", "t")],
+                             HealthPolicy(required=set()), verbose=False)
+    assert "v0.5.0" in out
 
 
 def test_corrupt_install_manifest_does_not_crash(tmp_path, monkeypatch):

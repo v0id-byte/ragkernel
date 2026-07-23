@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ragkernel import bootstrap
+from ragkernel import bootstrap, config
 
 
 def _args(**kw):
@@ -370,10 +370,9 @@ def test_reset_provider_short_circuits(isolated, capsys):
 
 
 def test_concurrent_setup_is_blocked(isolated, monkeypatch, tmp_path):
-    """第二个 setup 拿不到 .ragkernel/setup.lock 就退出——不用 SQLite 锁（首次装 auth.db 可能还没有）。"""
+    """第二个 setup 拿不到 .ragkernel/locks/setup.lock 就退出——不用 SQLite 锁（首次装 auth.db 可能还没有）。"""
     monkeypatch.setattr("ragkernel.config.ROOT", tmp_path)
-    (tmp_path / ".ragkernel").mkdir()
-    held = open(tmp_path / ".ragkernel" / "setup.lock", "w")
+    held = open(config.rk_path("locks", "setup.lock", create=True), "w")
     fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
     try:
         rc = bootstrap.run(_args(only="provider"))

@@ -1,0 +1,38 @@
+# git-cliff：从上一个 tag 到本 tag 自动生成 release notes。
+#
+# 人工写 notes 是发布流程里第一个被跳过的步骤——跳过一次，manifest 的 notes_url 就开始撒谎。
+# 本仓库的提交历史本来就是 conventional commits（feat/fix/docs/chore），直接可解析。
+
+[changelog]
+header = ""
+body = """
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group }}
+{% for commit in commits %}
+- {{ commit.message | upper_first }}{% if commit.id %} ({{ commit.id | truncate(length=7, end="") }}){% endif %}
+{%- endfor %}
+{% endfor %}
+"""
+trim = true
+footer = ""
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+split_commits = false
+commit_parsers = [
+  { message = "^feat", group = "新功能" },
+  { message = "^fix", group = "修复" },
+  { message = "^perf", group = "性能" },
+  { message = "^refactor", group = "重构" },
+  { message = "^docs", group = "文档" },
+  { message = "^test", group = "测试" },
+  # chore/ci/build 不进 notes——用户不关心仓库内务
+  { message = "^chore", skip = true },
+  { message = "^ci", skip = true },
+  { message = "^build", skip = true },
+]
+protect_breaking_commits = true
+filter_commits = false
+topo_order = false
+sort_commits = "oldest"

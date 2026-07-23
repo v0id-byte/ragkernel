@@ -1,0 +1,64 @@
+name: release
+
+# 打 tag 即发布。这条流水线是升级系统的可信根——客户端信任 manifest，manifest 只信任这里。
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write   # 建 Release + 推 releases 分支
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # git-cliff 要看到上一个 tag 才能算出区间
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: 三方版本一致性断言
+        # 硬闸门，且刻意排在 uv sync 之前——版本对不上就没必要花几分钟装 torch。
+        # --no-project 跳过本项目依赖解析，只借一个 pyyaml 跑校验脚本。
+        # 只验 tag 不够：manifest 是第三个可能撒谎的地方，所以 gen_manifest 内部还会
+        # 对产物再验一次（见 scripts/gen_manifest.py 的 verify）。
+        run: uv run --no-project --with pyyaml python scripts/gen_manifest.py --tag "$GITHUB_REF_NAME" --check-only
+
+      - name: 同步依赖
+        run: uv sync --python 3.12
+
+      - name: 测试
+        run: uv run pytest -q
+
+      - name: 生成 changelog
+        uses: orhun/git-cliff-action@v4
+        id: cliff
+        with:
+          config: cliff.toml
+          args: --latest
+
+      - name: 生成 manifest
+        run: uv run python scripts/gen_manifest.py --tag "$GITHUB_REF_NAME" --out dist/stable.json
+
+      - name: 建 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body: ${{ steps.cliff.outputs.content }}
+          files: dist/stable.json
+
+      - name: 发布 manifest 到 releases 分支
+        # 客户端要一个**与 tag 无关的固定 URL** 才能问「当前 stable 是哪个版本」；
+        # Release 资产的 URL 每个 tag 都变，用不了。用一个单文件孤儿分支托管，零额外基础设施：
+        #   https://raw.githubusercontent.com/<repo>/releases/stable.json
+        #
+        # 全程走 plumbing，不 checkout、不动工作树——在 CI 末尾对工作树做 clean/checkout
+        # 是典型的自伤操作，一旦某步失败就很难判断产物是否完整。
+        run: |
+          set -eu
+          blob="$(git hash-object -w dist/stable.json)"
+          tree="$(printf '100644 blob %s\tstable.json\n' "$blob" | git mktree)"
+          commit="$(git commit-tree "$tree" -m "release: manifest $GITHUB_REF_NAME")"
+          git push --force origin "$commit:refs/heads/releases"

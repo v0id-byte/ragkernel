@@ -10,6 +10,42 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_DIR = ROOT / "config"
 
+# 数据库兼容性标记。**声明值，不是迁移驱动**——store/auth 的 _migrate 靠 PRAGMA 内省，
+# 幂等且不看这个数；它存在只为让「这个版本的数据形态」可被外部比较：manifest 用它声明
+# 目标版本要求，升级前的兼容性闸门拿它和本机比。改动数据形态（加表/改列语义）时手动 +1。
+SCHEMA_VERSION = 1
+
+# ── .ragkernel/ 部署元数据 ──────────────────────────────────
+# 分层是为了不长成状态垃圾桶：state/ 是要持久的事实，cache/ 删了能重建，locks/ 是并发控制。
+# 早期版本平铺在 .ragkernel/ 下（install.json、setup.lock），所以读取端一律回落到旧路径，
+# 写入端只写新路径；install.sh 负责把存量文件迁过来。
+#
+# 路径一律**调用时**从 ROOT 算，不缓存成模块常量——测试靠 monkeypatch ROOT 隔离到 tmp_path，
+# import 期定死的常量会绕过它，把测试写进真实仓库目录。
+_RK_KINDS = ("state", "cache", "locks")
+
+
+def rk_dir() -> Path:
+    return ROOT / ".ragkernel"
+
+
+def rk_path(kind: str, name: str, *, create: bool = False) -> Path:
+    """.ragkernel/<kind>/<name>。create=True 才建目录——doctor 这类零副作用场景绝不能建。"""
+    assert kind in _RK_KINDS, kind
+    d = rk_dir() / kind
+    if create:
+        d.mkdir(parents=True, exist_ok=True)
+    return d / name
+
+
+def rk_read_path(kind: str, name: str) -> Path | None:
+    """读取端：新路径优先，回落旧的平铺路径；都没有返回 None。不产生任何副作用。"""
+    new = rk_path(kind, name)
+    if new.exists():
+        return new
+    legacy = rk_dir() / name
+    return legacy if legacy.exists() else None
+
 
 def load_env():
     envfile = ROOT / ".env"
