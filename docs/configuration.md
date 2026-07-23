@@ -1,5 +1,23 @@
 # 配置与 `ragkernel setup`
 
+> provider 配置、优先级规则、`ragkernel setup` 分步选项与密钥存储定位。
+
+[← Back to documentation](README.md)
+
+## 常见 provider 配置（`config/settings.yaml` 的 `provider`）
+
+| 场景 | kind | base_url | model | key |
+|---|---|---|---|---|
+| MiniMax（默认，零成本） | anthropic | `https://api.minimaxi.com/anthropic` | MiniMax-M3 | MINIMAX_API_KEY |
+| 官方 Claude | anthropic | 留空 | claude-sonnet-5 | ANTHROPIC_API_KEY |
+| 本地私有化 | openai | `http://localhost:8000/v1` | Qwen3-32B-AWQ | 任意非空 |
+
+> `model` 一列为示例默认值，按你要用的实际型号填/改（Claude 型号名以 [Anthropic 官方](https://docs.anthropic.com/en/docs/about-claude/models) 为准，本地模型填你 serving 的名字）。
+
+**推荐用 `ragkernel setup`（或 Web `/admin`）配置 provider**，无需手改 yaml。这类运行时覆盖存进**本地数据库**，好让 Web 管理页与 CLI setup 共用同一条配置路径；因此优先级是 **DB 覆盖 > `settings.yaml`**——「改了 yaml 不生效」多半是有覆盖，`ragkernel setup --reset-provider` 可清。完整规则见下一节。
+
+**私有化本地部署**：本地引擎几乎都是 OpenAI 兼容，用 `kind: openai` 接任意 OpenAI 兼容 serving（vLLM / Ollama / Xinference 等）；嵌入 + 重排本来就全本地。
+
 ## provider 配置优先级（**真实行为**，不是理想模型）
 
 不是简单的「环境变量 > DB > YAML」——两类字段规则不同：

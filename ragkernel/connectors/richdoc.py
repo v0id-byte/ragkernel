@@ -2,7 +2,7 @@
 保留标题/表格结构，喂给垂直层 split 效果远好于裸文本抽取。
 
 致谢 / Acknowledgment：文档转换由 **MarkItDown**（Microsoft，MIT License）提供，
-仓库 https://github.com/microsoft/markitdown 。见 README「致谢」。
+仓库 https://github.com/microsoft/markitdown 。见 docs/acknowledgments.md。
 
 转换失败时对 PDF/DOCX 优雅回退到 pypdf / python-docx（保证不因单一依赖失效而不可用）。
 """

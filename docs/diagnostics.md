@@ -1,5 +1,9 @@
 # 诊断契约（diagnostics）
 
+> `ragkernel doctor` 的输出契约：检查项、退出码与 JSON 结构。
+
+[← Back to documentation](README.md)
+
 `ragkernel doctor` 的输出是**对外接口**——监控、K8s probe、CI、以及将来的 Web dashboard
 都会消费它。本文是该接口的契约。字段结构改动要走 `schema_version`。
 
