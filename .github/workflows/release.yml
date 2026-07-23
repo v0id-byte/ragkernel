@@ -8,6 +8,14 @@ on:
 permissions:
   contents: write   # 建 Release + 推 releases 分支
 
+# 串行化：两个 tag workflow 重叠、或有人重跑旧 tag 时，最后完成的那个会用 force push
+# 定义 releases/stable.json——足以把 stable 渠道回滚到旧版本，而 GitHub Release 上已经
+# 有更新的版本了。cancel-in-progress: false —— 旧的那个要跑完（它可能已经建了 Release），
+# 只是不许和新的并发。
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -28,7 +36,9 @@ jobs:
         run: uv run --no-project --python 3.12 --with pyyaml python scripts/gen_manifest.py --tag "$GITHUB_REF_NAME" --check-only
 
       - name: 同步依赖
-        run: uv sync --python 3.12
+        # 必须带 --extra dev：pytest 声明在 [project.optional-dependencies].dev 下，
+        # 裸 uv sync 装不到它，下一步会在干净 runner 上直接失败。
+        run: uv sync --python 3.12 --extra dev
 
       - name: 测试
         run: uv run pytest -q
@@ -56,6 +66,14 @@ jobs:
         #
         # 全程走 plumbing，不 checkout、不动工作树——在 CI 末尾对工作树做 clean/checkout
         # 是典型的自伤操作，一旦某步失败就很难判断产物是否完整。
+        env:
+          # commit-tree 从 config / 这些环境变量取署名。runner 上没有 git identity 时
+          # git 会用「用户@主机名」合成一个（实测不会失败，但发布提交署名成
+          # runner@fv-az…internal 很难看，也有环境配置会直接拒绝）。显式给定。
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: github-actions[bot]@users.noreply.github.com
         run: |
           set -eu
           blob="$(git hash-object -w dist/stable.json)"
