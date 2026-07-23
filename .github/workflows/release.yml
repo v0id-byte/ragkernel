@@ -36,9 +36,11 @@ jobs:
         run: uv run --no-project --python 3.12 --with pyyaml python scripts/gen_manifest.py --tag "$GITHUB_REF_NAME" --check-only
 
       - name: 同步依赖
-        # 必须带 --extra dev：pytest 声明在 [project.optional-dependencies].dev 下，
-        # 裸 uv sync 装不到它，下一步会在干净 runner 上直接失败。
-        run: uv sync --python 3.12 --extra dev
+        # --extra dev：pytest 声明在 [project.optional-dependencies].dev 下，裸 uv sync
+        #   装不到它，下一步会在干净 runner 上直接失败。
+        # --extra cad：不带的话 CAD 测试全部 importorskip 静默跳过（实测 318 → 284），
+        #   而这条流水线是发版前的最后一道闸门——少跑 34 个用例还显示绿色，比不跑更危险。
+        run: uv sync --python 3.12 --extra dev --extra cad
 
       - name: 测试
         run: uv run pytest -q
