@@ -8,6 +8,7 @@
 |---|---|
 | [安装与部署](installation.md) | 一键安装器与全部变体、手动安装、Docker、平台与 Python 要求 |
 | [配置与 setup](configuration.md) | provider 配置与优先级、`ragkernel setup` 分步选项、密钥存储定位 |
+| [版本发现与升级](updates.md) | 检查新版本、一键升级、三种部署形态、崩溃恢复、离线与隐私 |
 
 ## Concepts
 
@@ -30,5 +31,6 @@
 | 文档 | 内容 |
 |---|---|
 | [原生 CAD 摄取（STEP/STL）](cad.md) | 格式与字段、精确/近似/声明、CAD 工具、明确不做 |
+| [发布流程](releasing.md) | 版本唯一来源、tag → CI → manifest 的三方断言、changelog、install.sh 退出码契约 |
 | [设计原则与理念](design-principles.md) | 取舍依据与基本立场 |
 | [致谢](acknowledgments.md) | 依赖的开源项目与许可证 |
