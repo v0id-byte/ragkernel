@@ -39,6 +39,7 @@ from . import config
 DEFAULT_ENDPOINT = "https://ragkernel.dev/releases/stable.json"
 _TIMEOUT = 8
 _UA = f"ragkernel/{CURRENT}"
+_MAX_MANIFEST_BYTES = 256 * 1024
 
 
 class UpdateError(Exception):
@@ -159,7 +160,12 @@ def _fetch(endpoint: str, etag: str | None) -> tuple[dict | None, str | None]:
         req.add_header("If-None-Match", etag)
     try:
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
-            return json.loads(r.read().decode("utf-8")), r.headers.get("ETag") or etag
+            # 限长读取：manifest 是几百字节的东西。endpoint 由运维配置、可信度较高，
+            # 但它仍是本模块唯一的外部输入面——被劫持或指错地址时不该把内存读爆。
+            raw = r.read(_MAX_MANIFEST_BYTES + 1)
+            if len(raw) > _MAX_MANIFEST_BYTES:
+                raise UpdateError(f"版本清单超过 {_MAX_MANIFEST_BYTES} 字节，拒绝解析")
+            return json.loads(raw.decode("utf-8")), r.headers.get("ETag") or etag
     except urllib.error.HTTPError as e:
         if e.code == 304:
             return None, etag
@@ -576,6 +582,12 @@ class UpdateController:
             ctx = {"update_id": update_id, "from_version": CURRENT,
                    "to_version": to_version, "target": target, "mode": mode}
 
+            # **拒绝要发生在置维护态之前。** 否则 docker 形态下调用 apply()（Web API 或
+            # 任何没先问 can_self_update 的调用方）会走完「置维护态 → 被 executor 拒绝 →
+            # 转 failed 且维护态故意保留」，把服务卡在 503 上——而这个动作本就不该开始。
+            if not can_self_update(mode):
+                raise UpdateRefused(f"{mode} 部署不做自更新，请重建容器", update_command(mode) or "")
+
             transition("draining", update_id=update_id, from_version=CURRENT,
                        from_commit=_commit(), to_version=to_version, target=target,
                        started_at=_now(), finished_at=None, error=None, stage="drain")
@@ -652,9 +664,14 @@ def _commit() -> str | None:
 
 
 def summary() -> dict:
-    """给 /api/system/info、ragkernel version、MCP get_server_info 用的同一份摘要。"""
+    """给 /api/system/info、ragkernel version、MCP get_server_info 用的同一份摘要。
+
+    **只读缓存，绝不联网。** 这三个调用方都要求即时返回：Web 端点卡 8 秒超时不可接受，
+    agent 反复调 get_server_info 更不能每次都出网。刷新缓存是 `ragkernel update`
+    与后台定时任务的职责，不是「报一下现状」这个动作的。
+    """
     mode = runtime_mode()
-    st = check()
+    st = cached_status()
     state = read_state()
     gate = can_upgrade(st.manifest) if st.manifest else None
     strategy = (st.manifest.get("upgrade_strategy") or {}) if st.manifest else {}
@@ -663,6 +680,9 @@ def summary() -> dict:
         "update": {
             "available": st.available, "latest": st.latest, "channel": st.channel,
             "notes_url": st.notes_url, "checked_at": st.checked_at,
+            # checked_at 为 None = 从没查过，与「查过且是最新」是两回事。消费方（CLI、
+            # 未来的 Web banner）必须能区分，否则会把「不知道」显示成「已是最新」。
+            "never_checked": st.checked_at is None and not st.disabled,
             "disabled": st.disabled, "error": st.error,
             "blocked": bool(gate and not gate.allowed and st.available),
             "blockers": gate.blockers if gate else [],

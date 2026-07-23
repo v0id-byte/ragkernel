@@ -128,6 +128,10 @@ def cmd_version(args):
         rows.append(("Update", f"v{s['update']['latest']} 可用"))
     elif s["update"]["error"]:
         rows.append(("Update", "无法获取版本清单"))
+    elif not s["update"]["checked_at"]:
+        # summary 只读缓存（绝不联网），全新安装时缓存是空的。此时说「已是最新」是撒谎——
+        # 我们从没查过。这条状态必须和「查过且确实最新」区分开。
+        rows.append(("Update", "尚未检查（ragkernel update）"))
     else:
         rows.append(("Update", "已是最新"))
     for k, v in rows:

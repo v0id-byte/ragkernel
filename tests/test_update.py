@@ -351,7 +351,7 @@ def test_missing_installer_is_reported_clearly(root):
 # ---------------------------------------------------------------- 编排
 
 
-def _fake_executor(monkeypatch, *, fail=False):
+def _fake_executor(monkeypatch, *, fail=False, mode="systemd"):
     class E(update.UpdateExecutor):
         def apply(self, target, *, on_event):
             on_event("同步依赖…")
@@ -359,12 +359,14 @@ def _fake_executor(monkeypatch, *, fail=False):
                 raise update.UpdateError("boom")
             return {"extras": []}
 
-    monkeypatch.setattr(update, "executor_for", lambda mode=None: E())
+    monkeypatch.setattr(update, "executor_for", lambda m=None: E())
+    # 必须 pin 运行形态：apply() 现在会在置维护态之前拒绝 docker，而仓库里有 Dockerfile——
+    # 谁在容器里跑 pytest，真实 runtime_mode() 就是 docker，这些用例会莫名其妙全挂。
+    monkeypatch.setattr(update, "runtime_mode", lambda: mode)
 
 
 def test_apply_runs_the_full_sequence(root, monkeypatch):
     _fake_executor(monkeypatch)
-    monkeypatch.setattr(update, "runtime_mode", lambda: "systemd")
     events = []
 
     res = update.UpdateController().apply("v9.9.9", to_version="9.9.9", on_event=events.append)
@@ -384,6 +386,47 @@ def test_apply_keeps_maintenance_on_failure(root, monkeypatch):
     st = update.read_state()
     assert st["state"] == "failed" and "boom" in st["error"]
     assert update.maintenance(), "升级没走完，不能假装无事发生地开门"
+
+
+def test_apply_refuses_docker_before_entering_maintenance(root, monkeypatch):
+    """**拒绝要发生在置维护态之前。** 否则 docker 形态下调用 apply()（Web API 或任何
+    没先问 can_self_update 的调用方）会走完「置维护态 → 被拒 → 转 failed 且维护态保留」，
+    把服务卡在 503 上——而这个动作本就不该开始。"""
+    monkeypatch.setattr(update, "runtime_mode", lambda: "docker")
+    with pytest.raises(update.UpdateRefused) as e:
+        update.UpdateController().apply("v9.9.9", to_version="9.9.9")
+
+    assert "docker compose" in e.value.command
+    assert update.maintenance() == {}, "被拒绝的升级不该留下维护态"
+    assert update.read_state()["state"] == "idle", "根本没开始，状态不该动"
+
+
+def test_summary_never_touches_the_network(root, monkeypatch):
+    """summary 是 /api/system/info、ragkernel version、MCP get_server_info 的共同数据源，
+    三者都要求即时返回——Web 端点卡 8 秒超时不可接受，agent 反复调更不能每次出网。"""
+    monkeypatch.setattr(update, "_fetch", lambda e, t: pytest.fail("summary 不得联网"))
+    s = update.summary()
+    assert s["server"]["version"] == update.CURRENT
+
+
+def test_oversized_manifest_is_rejected(root, monkeypatch):
+    """endpoint 是本模块唯一的外部输入面：被劫持或指错地址时不该把内存读爆。"""
+    class FakeResp:
+        headers = {}
+
+        def read(self, n=-1):
+            return b"x" * n
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(update.urllib.request, "urlopen", lambda req, timeout=None: FakeResp())
+    st = update.check(force=True)
+    assert st.error and "拒绝解析" in st.error
+    assert st.available is False, "拒绝解析后不能报出可升级"
 
 
 def test_apply_refuses_when_another_upgrade_is_in_flight(root, monkeypatch):
