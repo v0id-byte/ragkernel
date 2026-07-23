@@ -25,7 +25,7 @@ jobs:
         # --no-project 跳过本项目依赖解析，只借一个 pyyaml 跑校验脚本。
         # 只验 tag 不够：manifest 是第三个可能撒谎的地方，所以 gen_manifest 内部还会
         # 对产物再验一次（见 scripts/gen_manifest.py 的 verify）。
-        run: uv run --no-project --with pyyaml python scripts/gen_manifest.py --tag "$GITHUB_REF_NAME" --check-only
+        run: uv run --no-project --python 3.12 --with pyyaml python scripts/gen_manifest.py --tag "$GITHUB_REF_NAME" --check-only
 
       - name: 同步依赖
         run: uv sync --python 3.12

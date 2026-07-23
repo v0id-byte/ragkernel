@@ -40,7 +40,13 @@ def _schema_version() -> int:
     src = (ROOT / "ragkernel" / "config.py").read_text(encoding="utf-8")
     for line in src.splitlines():
         if line.startswith("SCHEMA_VERSION"):
-            return int(line.split("=", 1)[1].strip())
+            # 去行尾注释再转 int：`SCHEMA_VERSION = 2  # 加了 xxx 表` 是很自然的写法，
+            # 而这里一炸就是发版当场失败。
+            raw = line.split("=", 1)[1].split("#", 1)[0].strip()
+            try:
+                return int(raw)
+            except ValueError:
+                _fail(f"SCHEMA_VERSION 不是整数：{raw!r}")
     _fail("ragkernel/config.py 里找不到 SCHEMA_VERSION")
 
 

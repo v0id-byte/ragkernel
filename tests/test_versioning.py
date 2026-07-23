@@ -100,6 +100,16 @@ def test_manifest_matches_current_version():
     assert m["requires"]["ragkernel_schema"] == config.SCHEMA_VERSION
 
 
+def test_schema_version_parse_tolerates_trailing_comment(tmp_path, monkeypatch):
+    """`SCHEMA_VERSION = 2  # 加了 xxx 表` 是很自然的写法，而这里一炸就是发版当场失败。"""
+    gm = _load_gen_manifest()
+    fake = tmp_path / "ragkernel"
+    fake.mkdir()
+    (fake / "config.py").write_text("SCHEMA_VERSION = 7  # 加了 foo 表\n", encoding="utf-8")
+    monkeypatch.setattr(gm, "ROOT", tmp_path)
+    assert gm._schema_version() == 7
+
+
 def test_manifest_rejects_tag_pyproject_mismatch():
     """发布链路第一道闸门：tag 与 pyproject 不一致必须发不出去。"""
     gm = _load_gen_manifest()
