@@ -11,7 +11,7 @@
   管理员密码读 `RAGKERNEL_SETUP_ADMIN_PASSWORD` 或交互 getpass。
 - `--yes` **缺凭证就 fail-fast 非零退出**，不静默跳过——否则 CI 显示成功、服务启动即挂。
   「存在」判定必须是**非空**（`RAGKERNEL_SETUP_API_KEY=""` 是常见 CI 事故）。
-- 并发用 `.ragkernel/setup.lock` **文件锁**（不用 SQLite 锁——首次装时 auth.db 可能还不存在）。
+- 并发用 `.ragkernel/locks/setup.lock` **文件锁**（不用 SQLite 锁——首次装时 auth.db 可能还不存在）。
 - 明文 token 只在交互式 tty 打印；`--yes`/非 tty 默认脱敏，需 `--show-token` 才出。
 """
 
@@ -351,14 +351,27 @@ def run(args) -> int:
         print("已清除 provider 运行时覆盖，回退到 config/settings.yaml。")
         return 0
 
-    lockdir = config.ROOT / ".ragkernel"
-    lockdir.mkdir(exist_ok=True)
-    fp = open(lockdir / "setup.lock", "w")
-    try:
-        fcntl.flock(fp, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        print("另一个 setup 进程正在运行；请等待其结束后重试。", file=sys.stderr)
-        return 1
+    # 过渡期同时持有新旧两把锁：滚动升级时可能还有**旧代码的 setup 正在跑**（比如卡在
+    # 2GB 模型下载），它只认平铺的 .ragkernel/setup.lock。只锁新路径的话，两个进程会同时
+    # 进入临界区并发改 auth/provider。加锁顺序固定「先旧后新」，新旧进程都从旧锁开始竞争，
+    # 不会死锁。等不再支持从布局迁移前的版本升级时，legacy 那把可以去掉。
+    locks = []
+    for path in (config.rk_dir() / "setup.lock",
+                 config.rk_path("locks", "setup.lock", create=True)):
+        try:
+            fp = open(path, "w")
+        except OSError:  # 旧路径所在目录不可写等——不因过渡期兼容而挡住正常安装
+            continue
+        try:
+            fcntl.flock(fp, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            fp.close()
+            for held in locks:
+                fcntl.flock(held, fcntl.LOCK_UN)
+                held.close()
+            print("另一个 setup 进程正在运行；请等待其结束后重试。", file=sys.stderr)
+            return 1
+        locks.append(fp)
 
     try:
         print("== 环境预检 ==")
@@ -372,8 +385,9 @@ def run(args) -> int:
         _wrapup(args)
         return 0
     finally:
-        fcntl.flock(fp, fcntl.LOCK_UN)
-        fp.close()
+        for fp in reversed(locks):
+            fcntl.flock(fp, fcntl.LOCK_UN)
+            fp.close()
 
 
 def _wrapup(args) -> None:

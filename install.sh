@@ -18,6 +18,9 @@ CAD=0
 UPDATE=0
 NO_SETUP="${RAGKERNEL_NO_SETUP:-}"
 PYTHON="3.12"
+# --update 被要求了、但代码实际没动（脏工作区/非默认分支/detached）。此时依赖仍会 sync，
+# 所以不是失败——但也绝不能报成功：调用方（ragkernel upgrade）会把 0 当成「升级完成」。
+SKIP_REASON=""
 
 usage() {
   cat <<'EOF'
@@ -28,6 +31,12 @@ usage() {
   --update         目录已存在时拉取更新（默认不拉——安装≠更新）
   --no-setup       只装环境，不进配置向导（亦可 RAGKERNEL_NO_SETUP=1）
   --python <ver>   Python 版本（默认 3.12）
+
+退出码（供 `ragkernel upgrade` 等程序调用方判读）：
+  0  成功
+  2  参数错误
+  3  --update 被要求但代码未变更（脏工作区 / 非默认分支 / detached HEAD）；依赖仍已 sync
+  1  其余失败
 EOF
 }
 
@@ -130,14 +139,17 @@ elif [ -d "$DIR/.git" ]; then
       fi
     elif ! BRANCH="$(git -C "$DIR" symbolic-ref --short -q HEAD)"; then
       say "detached HEAD @ $(git -C "$DIR" describe --tags --always 2>/dev/null)，跳过更新"
+      SKIP_REASON="detached HEAD"
     else
       # 默认分支动态探测：fork / 企业 mirror 可能是 master/stable
       DEFAULT_BRANCH="$(git -C "$DIR" remote show origin 2>/dev/null | sed -n '/HEAD branch/s/.*: //p')"
       [ -n "$DEFAULT_BRANCH" ] || DEFAULT_BRANCH=main
       if [ "$BRANCH" != "$DEFAULT_BRANCH" ]; then
         say "当前分支 $BRANCH（默认 $DEFAULT_BRANCH），跳过自动更新"
+        SKIP_REASON="分支 $BRANCH 非默认分支 $DEFAULT_BRANCH"
       elif [ -n "$(git -C "$DIR" status --porcelain)" ]; then
         say "工作区有未提交改动，跳过 pull（仍会 sync）"
+        SKIP_REASON="工作区有未提交改动"
       else
         say "更新分支：$BRANCH"
         git -C "$DIR" pull --ff-only
@@ -165,23 +177,41 @@ fi
 # ------------------------------------------------------------------ 安装指纹
 
 # 放 .ragkernel/ 而非 data/：这是部署元数据，不是运行数据（data/ 才是备份对象）。绝不写密钥。
+# 分层见 config.py 的 _RK_LAYOUT：state/ 持久事实、cache/ 可重建、locks/ 并发控制。
 COMMIT="$(git -C "$DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 UVVER="$("$UV" --version 2>/dev/null | awk '{print $2}')"
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 REF_REC="${REF:-$(git -C "$DIR" symbolic-ref --short -q HEAD 2>/dev/null || echo detached)}"
 EXTRAS='[]'; [ "$CAD" -eq 1 ] && EXTRAS='["cad"]'
-mkdir -p "$DIR/.ragkernel"
-# 重跑保留 installed_at，只更新 updated_at
+# 版本读 pyproject（唯一版本源，见 ragkernel/__init__.py）。取第一个 version = 行——
+# [project] 在文件最前，后面的 [tool.*] 段不会先命中。
+VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$DIR/pyproject.toml" 2>/dev/null | head -1)"
+CHANNEL="${RAGKERNEL_CHANNEL:-stable}"
+
+STATE_DIR="$DIR/.ragkernel/state"
+NEW_FP="$STATE_DIR/install.json"
+OLD_FP="$DIR/.ragkernel/install.json"   # v1 的平铺路径
+mkdir -p "$STATE_DIR"
+
+# 重跑保留 installed_at，只更新 updated_at。旧安装的指纹在平铺路径上，一并读走。
 OLD_INSTALLED=""
-[ -f "$DIR/.ragkernel/install.json" ] && OLD_INSTALLED="$(sed -n 's/.*"installed_at" *: *"\([^"]*\)".*/\1/p' "$DIR/.ragkernel/install.json")"
+for f in "$NEW_FP" "$OLD_FP"; do
+  if [ -z "$OLD_INSTALLED" ] && [ -f "$f" ]; then
+    OLD_INSTALLED="$(sed -n 's/.*"installed_at" *: *"\([^"]*\)".*/\1/p' "$f")"
+  fi
+done
 INSTALLED_AT="${OLD_INSTALLED:-$NOW}"
-cat > "$DIR/.ragkernel/install.json" <<JSON
+
+cat > "$NEW_FP" <<JSON
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "installer": "install.sh",
-  "installer_version": 1,
+  "installer_version": 2,
+  "install_source": "git",
+  "channel": "$CHANNEL",
   "installed_at": "$INSTALLED_AT",
   "updated_at": "$NOW",
+  "version": "$VERSION",
   "ref": "$REF_REC",
   "commit": "$COMMIT",
   "python": "$PYTHON",
@@ -189,6 +219,17 @@ cat > "$DIR/.ragkernel/install.json" <<JSON
   "extras": $EXTRAS
 }
 JSON
+
+# 旧路径同步写一份镜像，**不能删**。
+# `--update --ref <旧 tag>` 会把代码退回到只认平铺路径的版本；`--update` 被跳过时
+# （脏工作区/非默认分支/detached）留在盘上的也可能是旧代码。此时只有 state/ 下有指纹的话，
+# 旧代码会把一台正常安装报成「未知（手动安装）」，还丢掉 installed_at 与版本信号。
+# 之所以当初想删，是怕回落读到过期的 v1——但两份每次一起写就不存在过期，隐患消失。
+# 等不再支持从布局迁移前的版本升级时，这一份可以去掉。
+cp "$NEW_FP" "$OLD_FP"
+
+# 旧的 setup.lock **也不删**：删文件并不会释放已持有的 flock（持有者锁在已 unlink 的 inode 上），
+# 反而让后来的旧代码新建一个文件、拿到一把谁也不认的新锁。过渡期由 bootstrap 同时持有两把锁。
 
 # ------------------------------------------------------------------ 环境摘要 + 交棒
 
@@ -198,6 +239,7 @@ printf '  Ref       %s (%s)\n' "$REF_REC" "$COMMIT"
 printf '  Python    %s\n' "$PYTHON"
 printf '  uv        %s\n' "$UVVER"
 printf '  Extras    cad: %s\n' "$([ "$CAD" -eq 1 ] && printf yes || printf no)"
+[ -n "$SKIP_REASON" ] && printf '  Update    未变更（%s）\n' "$SKIP_REASON"
 
 # 真·可交互判定：stty 能对 /dev/tty 做终端操作才交互。curl|sh 的 stdin 是脚本本身，
 # 但 setup 从 /dev/tty 读，所以这里探 /dev/tty 而非 stdin。CI / docker RUN / 非 tty SSH → 打印命令收工。
@@ -210,3 +252,8 @@ else
   if command -v uv >/dev/null 2>&1; then RUN=uv; else RUN="$UV"; fi
   printf '\nNext: cd %s && %s run ragkernel setup\n' "$DIR" "$RUN"
 fi
+
+# 放在最后：环境确实装好了（前面该做的都做了），只是代码没动。程序调用方靠这个区分
+# 「升级完成」与「什么都没发生」——报 0 会让 update 状态机把未变更记成 completed。
+[ -n "$SKIP_REASON" ] && exit 3
+exit 0

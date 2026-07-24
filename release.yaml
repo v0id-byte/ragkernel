@@ -1,0 +1,24 @@
+# 发布元数据：每次打 tag 前由维护者更新。
+#
+# 这里放的都是**推导不出来、只能由发布方判断**的东西。能推导的一律不写在这（版本号来自
+# pyproject、Python 要求来自 requires-python、schema 来自 config.SCHEMA_VERSION）——
+# 凡是能推导的就绝不手写，手写的每一处都是日后与真相不一致的入口。
+#
+# 客户端读到这些字段后的行为见 docs/updates.md。
+
+# 低于这个版本的实例不能直升到本版（需要先升到中间版本）。跨大版本升级在企业里必然发生，
+# 与其让它在 migrate 阶段炸，不如在升级前就明确拒绝并说明。
+min_upgradable_from: "0.1.0"
+
+# 早于这个版本的独立客户端（未来的桌面端）与本服务端不兼容。
+min_client_version: "0.1.0"
+
+# null | "low" | "critical"。声明 critical 时，客户端 doctor 会把「有新版本」这条
+# 从 warning 升成 error——「有更新可用」和「你在跑一个有已知漏洞的版本」是两件事。
+security: null
+
+# 升级会发生什么，由发布方说清楚，客户端不用猜。停机时长直接决定运维会不会在工作时间点这个按钮。
+upgrade_strategy:
+  restart_required: true
+  migration_required: false
+  estimated_downtime_seconds: 30

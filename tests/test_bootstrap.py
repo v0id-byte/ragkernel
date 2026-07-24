@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ragkernel import bootstrap
+from ragkernel import bootstrap, config
 
 
 def _args(**kw):
@@ -370,10 +370,9 @@ def test_reset_provider_short_circuits(isolated, capsys):
 
 
 def test_concurrent_setup_is_blocked(isolated, monkeypatch, tmp_path):
-    """第二个 setup 拿不到 .ragkernel/setup.lock 就退出——不用 SQLite 锁（首次装 auth.db 可能还没有）。"""
+    """第二个 setup 拿不到 .ragkernel/locks/setup.lock 就退出——不用 SQLite 锁（首次装 auth.db 可能还没有）。"""
     monkeypatch.setattr("ragkernel.config.ROOT", tmp_path)
-    (tmp_path / ".ragkernel").mkdir()
-    held = open(tmp_path / ".ragkernel" / "setup.lock", "w")
+    held = open(config.rk_path("locks", "setup.lock", create=True), "w")
     fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
     try:
         rc = bootstrap.run(_args(only="provider"))
@@ -381,6 +380,43 @@ def test_concurrent_setup_is_blocked(isolated, monkeypatch, tmp_path):
     finally:
         fcntl.flock(held, fcntl.LOCK_UN)
         held.close()
+
+
+def test_legacy_setup_lock_still_blocks(isolated, monkeypatch, tmp_path):
+    """滚动升级时可能还有**旧代码的 setup 在跑**（卡在 2GB 模型下载），它只认平铺的
+    .ragkernel/setup.lock。只锁新路径的话两个进程会同时改 auth/provider。"""
+    monkeypatch.setattr("ragkernel.config.ROOT", tmp_path)
+    legacy = config.rk_dir() / "setup.lock"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    held = open(legacy, "w")
+    fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        assert bootstrap.run(_args(only="provider")) == 1
+    finally:
+        fcntl.flock(held, fcntl.LOCK_UN)
+        held.close()
+
+
+def test_blocked_setup_releases_the_locks_it_took(isolated, monkeypatch, tmp_path):
+    """在第二把锁上被挡住时，第一把必须回滚释放——否则一次失败的 setup 会把后续
+    所有 setup 永久锁死，而现场看起来像「另一个 setup 一直在跑」。"""
+    monkeypatch.setattr("ragkernel.config.ROOT", tmp_path)
+    new_lock = config.rk_path("locks", "setup.lock", create=True)
+    held = open(new_lock, "w")
+    fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        assert bootstrap.run(_args(only="provider")) == 1
+    finally:
+        fcntl.flock(held, fcntl.LOCK_UN)
+        held.close()
+
+    # 旧锁此刻必须是空闲的
+    probe = open(config.rk_dir() / "setup.lock", "w")
+    try:
+        fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)  # 拿不到会抛 BlockingIOError
+        fcntl.flock(probe, fcntl.LOCK_UN)
+    finally:
+        probe.close()
 
 
 def test_full_run_yes_creates_admin_keeps_provider(isolated, monkeypatch, tmp_path):

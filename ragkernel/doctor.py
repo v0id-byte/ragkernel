@@ -40,8 +40,8 @@ def _installed_at() -> dict:
     """读 install.sh 留下的安装指纹。手动安装没有这个文件，不算错。"""
     from . import config
 
-    p = config.ROOT / ".ragkernel" / "install.json"
-    if not p.exists():
+    p = config.rk_read_path("state", "install.json")
+    if p is None:
         return {}
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
