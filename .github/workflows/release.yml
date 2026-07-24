@@ -9,8 +9,8 @@ permissions:
   contents: write   # 建 Release + 推 releases 分支
 
 # 串行化：两个 tag workflow 重叠、或有人重跑旧 tag 时，最后完成的那个会用 force push
-# 定义 releases/stable.json——足以把 stable 渠道回滚到旧版本，而 GitHub Release 上已经
-# 有更新的版本了。cancel-in-progress: false —— 旧的那个要跑完（它可能已经建了 Release），
+# 定义渠道 manifest——足以把 stable 渠道回滚到旧版本，而 GitHub Release 上已经有更新的
+# 版本了。cancel-in-progress: false —— 旧的那个要跑完（它可能已经建了 Release），
 # 只是不许和新的并发。
 concurrency:
   group: release
@@ -28,19 +28,40 @@ jobs:
         with:
           enable-cache: true
 
+      - name: 判定渠道
+        # `v0.2.0-rc.1` / `-beta.1` 这类预发布 tag 绝不能落到 stable：客户端只查渠道
+        # manifest，一旦 stable.json 指向 rc，所有稳定渠道的实例都会被引导升上去。
+        # 判据是 tag 里有没有连字符（semver 的预发布记法），路由到独立的渠道文件。
+        id: ch
+        run: |
+          set -eu
+          case "$GITHUB_REF_NAME" in
+            *-*) channel=prerelease ;;
+            *)   channel=stable ;;
+          esac
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$([ "$channel" = prerelease ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "==> 渠道：$channel"
+
       - name: 三方版本一致性断言
         # 硬闸门，且刻意排在 uv sync 之前——版本对不上就没必要花几分钟装 torch。
-        # --no-project 跳过本项目依赖解析，只借一个 pyyaml 跑校验脚本。
+        # --no-project 跳过本项目依赖解析，只借 pyyaml/packaging 跑校验脚本。
         # 只验 tag 不够：manifest 是第三个可能撒谎的地方，所以 gen_manifest 内部还会
-        # 对产物再验一次（见 scripts/gen_manifest.py 的 verify）。
-        run: uv run --no-project --python 3.12 --with pyyaml python scripts/gen_manifest.py --tag "$GITHUB_REF_NAME" --check-only
+        # 对产物再验一次，并按 docs/schemas/manifest-v1.json 校验字段取值。
+        run: >
+          uv run --no-project --python 3.12 --with pyyaml --with packaging
+          python scripts/gen_manifest.py --tag "$GITHUB_REF_NAME"
+          --channel "${{ steps.ch.outputs.channel }}" --check-only
 
       - name: 同步依赖
+        # --locked：uv.lock 若与 pyproject 不同步，默认行为是在 runner 上**静默重新解析**，
+        #   于是 tag 发出去时源码与 lockfile 不一致，后续从该 tag 安装可能解析到别的版本。
+        #   加了它，陈旧的 lockfile 会直接挡住发布。
         # --extra dev：pytest 声明在 [project.optional-dependencies].dev 下，裸 uv sync
         #   装不到它，下一步会在干净 runner 上直接失败。
         # --extra cad：不带的话 CAD 测试全部 importorskip 静默跳过（实测 318 → 284），
         #   而这条流水线是发版前的最后一道闸门——少跑 34 个用例还显示绿色，比不跑更危险。
-        run: uv sync --python 3.12 --extra dev --extra cad
+        run: uv sync --locked --python 3.12 --extra dev --extra cad
 
       - name: 测试
         run: uv run pytest -q
@@ -53,18 +74,30 @@ jobs:
           args: --latest
 
       - name: 生成 manifest
-        run: uv run python scripts/gen_manifest.py --tag "$GITHUB_REF_NAME" --out dist/stable.json
+        run: >
+          uv run python scripts/gen_manifest.py --tag "$GITHUB_REF_NAME"
+          --channel "${{ steps.ch.outputs.channel }}"
+          --out "dist/${{ steps.ch.outputs.channel }}.json"
 
       - name: 建 Release
         uses: softprops/action-gh-release@v2
         with:
           body: ${{ steps.cliff.outputs.content }}
-          files: dist/stable.json
+          files: dist/${{ steps.ch.outputs.channel }}.json
+          prerelease: ${{ steps.ch.outputs.prerelease == 'true' }}
 
       - name: 发布 manifest 到 releases 分支
-        # 客户端要一个**与 tag 无关的固定 URL** 才能问「当前 stable 是哪个版本」；
-        # Release 资产的 URL 每个 tag 都变，用不了。用一个单文件孤儿分支托管，零额外基础设施：
-        #   https://raw.githubusercontent.com/<repo>/releases/stable.json
+        # 客户端要一个**与 tag 无关的固定 URL** 才能问「当前渠道是哪个版本」；
+        # Release 资产的 URL 每个 tag 都变，用不了。
+        #
+        # 分支 releases 由 GitHub Pages 托管，路径 releases/<channel>.json 对应
+        #   https://v0id-byte.github.io/ragkernel/releases/stable.json
+        # （见 update.DEFAULT_ENDPOINT_TEMPLATE）。选 Pages 而非 raw.githubusercontent
+        # 是为了迁移：日后绑定自有域名时 *.github.io 会 301 到新域名，已装机器不改配置
+        # 也能继续查到——endpoint 一旦散落到成千上万台机器上就改不动了。
+        #
+        # 保留分支上已有的其他渠道文件：本次只替换自己那一个，否则发一次 rc 就会把
+        # stable.json 从分支上抹掉。
         #
         # 全程走 plumbing，不 checkout、不动工作树——在 CI 末尾对工作树做 clean/checkout
         # 是典型的自伤操作，一旦某步失败就很难判断产物是否完整。
@@ -76,9 +109,23 @@ jobs:
           GIT_AUTHOR_EMAIL: github-actions[bot]@users.noreply.github.com
           GIT_COMMITTER_NAME: github-actions[bot]
           GIT_COMMITTER_EMAIL: github-actions[bot]@users.noreply.github.com
+          CHANNEL: ${{ steps.ch.outputs.channel }}
         run: |
           set -eu
-          blob="$(git hash-object -w dist/stable.json)"
-          tree="$(printf '100644 blob %s\tstable.json\n' "$blob" | git mktree)"
-          commit="$(git commit-tree "$tree" -m "release: manifest $GITHUB_REF_NAME")"
+          git fetch --force origin 'refs/heads/releases:refs/remotes/origin/releases' 2>/dev/null || true
+
+          # 用索引拼树：先把已有分支内容读进来（首次发布时分支不存在，跳过），
+          # 再覆盖本渠道那一个文件。GIT_INDEX_FILE 指向临时索引，不碰工作树的那份。
+          export GIT_INDEX_FILE="$(mktemp -u)"
+          if git rev-parse --verify -q origin/releases >/dev/null; then
+            git read-tree origin/releases
+            parent="-p origin/releases"
+          else
+            parent=""
+          fi
+          blob="$(git hash-object -w "dist/$CHANNEL.json")"
+          git update-index --add --cacheinfo "100644,$blob,releases/$CHANNEL.json"
+          tree="$(git write-tree)"
+          # shellcheck disable=SC2086
+          commit="$(git commit-tree "$tree" $parent -m "release: $CHANNEL manifest $GITHUB_REF_NAME")"
           git push --force origin "$commit:refs/heads/releases"

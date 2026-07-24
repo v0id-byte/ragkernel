@@ -135,6 +135,45 @@ def test_verify_catches_tampered_manifest():
         gm.verify(m, tag)
 
 
+def test_manifest_rejects_bad_security_value(tmp_path, monkeypatch):
+    """release.yaml 每次发布手改，`security: high`（不在枚举里）能过「字段存在」检查，
+    然后发出一份违反自家 schema 的 manifest——企业侧校验器会拒收整个渠道。"""
+    gm = _load_gen_manifest()
+    _with_release_yaml(gm, tmp_path, monkeypatch, security="high")
+    with pytest.raises(SystemExit):
+        gm.build(_current_tag(), channel="stable", repo="x/y", published_at=None)
+
+
+def test_manifest_rejects_quoted_boolean(tmp_path, monkeypatch):
+    """YAML 里 `restart_required: "true"` 是字符串不是布尔。"""
+    gm = _load_gen_manifest()
+    _with_release_yaml(gm, tmp_path, monkeypatch,
+                       upgrade_strategy={"restart_required": "true", "migration_required": False})
+    with pytest.raises(SystemExit):
+        gm.build(_current_tag(), channel="stable", repo="x/y", published_at=None)
+
+
+def _with_release_yaml(gm, tmp_path, monkeypatch, **over):
+    """在临时 ROOT 里放一份被改坏的 release.yaml，其余文件从真实仓库软链过来。"""
+    import yaml
+
+    rel = yaml.safe_load((config.ROOT / "release.yaml").read_text(encoding="utf-8"))
+    rel.update(over)
+    (tmp_path / "release.yaml").write_text(yaml.safe_dump(rel), encoding="utf-8")
+    (tmp_path / "pyproject.toml").symlink_to(config.ROOT / "pyproject.toml")
+    (tmp_path / "ragkernel").symlink_to(config.ROOT / "ragkernel")
+    monkeypatch.setattr(gm, "ROOT", tmp_path)
+
+
+def test_prerelease_version_normalisation():
+    """semver 写 v0.2.0-rc.1，pyproject / importlib.metadata 里是规范化的 0.2.0rc1。
+    裸字符串比较会把一次完全正确的发布判成版本不一致。"""
+    gm = _load_gen_manifest()
+    assert gm._same_version("0.2.0-rc.1", "0.2.0rc1")
+    assert gm._same_version("0.2.0", "0.2.0")
+    assert not gm._same_version("0.2.0", "0.3.0")
+
+
 def test_manifest_satisfies_published_schema():
     """生成器与 docs/schemas/manifest-v1.json 必须同步演进——schema 加了必填字段
     而生成器没跟上，企业自建 endpoint 照 schema 校验就会跟官方产物对不上。"""

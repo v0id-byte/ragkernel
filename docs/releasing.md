@@ -56,15 +56,36 @@ CI 刻意把这一步排在 `uv sync` 之前——版本对不上就没必要花
 
 ## manifest 发布在哪
 
-客户端要一个**与 tag 无关的固定 URL** 才能问「当前 stable 是哪个版本」，Release 资产的
-URL 每个 tag 都变，用不了。所以 workflow 额外把 manifest 推到一个单文件孤儿分支：
+客户端要一个**与 tag 无关的固定 URL** 才能问「当前渠道是哪个版本」，Release 资产的
+URL 每个 tag 都变，用不了。所以 workflow 额外把 manifest 推到 `releases` 分支，
+由 GitHub Pages 托管：
 
 ```
-https://raw.githubusercontent.com/v0id-byte/ragkernel/releases/stable.json
+https://v0id-byte.github.io/ragkernel/releases/stable.json
 ```
 
-企业客户可以自建 endpoint 完全绕开 GitHub、自控灰度节奏，格式照
+**为什么是 Pages 而不是 `raw.githubusercontent`**：日后把自有域名绑成 Pages 的
+custom domain 时，`*.github.io` 的旧地址会 301 到新域名，已经装在客户机器上的实例
+不改配置也能继续查到。`raw` 没有这个重定向能力——endpoint 一旦散出去就永远改不动了。
+
+企业客户可以把 `update.endpoint` 指向自建地址完全绕开 GitHub、自控灰度节奏，格式照
 [`docs/schemas/manifest-v1.json`](schemas/manifest-v1.json) 校验即可。
+
+## 渠道与预发布
+
+tag 里带连字符（`v0.2.0-rc.1`、`v0.2.0-beta.1`）即视为预发布：
+
+| tag | 渠道文件 | GitHub Release |
+|---|---|---|
+| `v0.2.0` | `releases/stable.json` | 正式 |
+| `v0.2.0-rc.1` | `releases/prerelease.json` | 标记为 prerelease |
+
+**预发布绝不能落到 stable**：客户端只查渠道 manifest，一旦 `stable.json` 指向 rc，
+所有稳定渠道的实例都会被引导升上去。发布分支上每个渠道各占一个文件，发一次 rc
+不会动 `stable.json`。
+
+> 预发布的版本号在 semver 与 PEP 440 里写法不同（`0.2.0-rc.1` vs `0.2.0rc1`），
+> 三方断言按 PEP 440 规范化后比较，两种写法都能对上。
 
 ## changelog
 

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ragkernel.dev/schemas/manifest-v1.json",
+  "$id": "https://raw.githubusercontent.com/v0id-byte/ragkernel/main/docs/schemas/manifest-v1.json",
   "title": "RagKernel channel manifest v1",
   "description": "升级客户端查询的版本清单。官方由 CI 生成；企业自建 endpoint 可照此校验自己的产物，而不必等客户端解析失败才发现写错。消费方必须忽略未知字段——新增字段不算破坏性变更。",
   "type": "object",
