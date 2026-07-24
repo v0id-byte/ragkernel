@@ -1,0 +1,25 @@
+{
+  "$schema": "https://raw.githubusercontent.com/v0id-byte/ragkernel/main/docs/schemas/manifest-v1.json",
+  "schema_version": 1,
+  "channel": "stable",
+  "version": "0.1.0",
+  "tag": "v0.1.0",
+  "url": "https://github.com/v0id-byte/ragkernel/releases/tag/v0.1.0",
+  "notes_url": "https://github.com/v0id-byte/ragkernel/releases/tag/v0.1.0",
+  "published_at": "2026-07-24T01:06:04Z",
+  "generated_at": "2026-07-24T01:06:04Z",
+  "requires": {
+    "python": ">=3.12,<3.14",
+    "ragkernel_schema": 1,
+    "min_upgradable_from": "0.1.0"
+  },
+  "upgrade_strategy": {
+    "restart_required": true,
+    "migration_required": false,
+    "estimated_downtime_seconds": 30
+  },
+  "min_client_version": "0.1.0",
+  "security": null,
+  "signature": null,
+  "key_id": null
+}
