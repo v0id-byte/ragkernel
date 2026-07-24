@@ -20,9 +20,16 @@ ragkernel stats                     # 知识库统计
 ragkernel serve                     # 启动 Web
 ragkernel mcp serve                 # 启动 MCP Server（把只读检索暴露给 Agent）
 ragkernel token new --user <name>   # 签发 agent token（MCP 鉴权用，只显示一次）
+ragkernel version                   # 版本 / commit / schema / 运行形态（--json 供 CMDB / Ansible）
+ragkernel update                    # 检查有没有新版本（只读，不改任何东西）
+ragkernel upgrade                   # 升级（--dry-run 只说明将要发生什么；--to 指定 ref）
 ```
 
-`setup` 的分步选项与 `doctor` 的输出契约分别见 [配置](configuration.md) 与 [诊断](diagnostics.md)。
+`setup` 的分步选项与 `doctor` 的输出契约分别见 [配置](configuration.md) 与 [诊断](diagnostics.md)；
+`update` / `upgrade` 的部署形态差异与崩溃恢复见 [版本发现与升级](updates.md)。
+
+> `update` 与 `upgrade` 分开是照 apt/brew 的肌肉记忆：`update` 在那个语境里就是「刷新元数据」，
+> 让它动代码会违反预期。`ragkernel version` 对标 `docker version`——doctor 是体检，version 是身份证。
 
 ## 验证
 

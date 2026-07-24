@@ -39,6 +39,16 @@ vertical: equipment
 classify:
   llm: false
 
+# 版本发现。默认只提醒、绝不自动升级——生产库不能被悄悄换掉。
+# 检查是匿名 GET：不带实例 ID、不带任何遥测；User-Agent 里的版本号会暴露给 endpoint 方，
+# 离线/内网部署把 check 设为 false 即可彻底关闭。详见 docs/updates.md。
+update:
+  check: true
+  channel: stable        # stable | none
+  endpoint: ""           # 留空走官方 manifest；企业内网可填自家地址，完全绕开 GitHub
+  interval_hours: 6
+  auto_install: false    # 预留，当前版本不实现自动安装
+
 web:
   host: 127.0.0.1
   port: 8360

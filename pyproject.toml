@@ -18,6 +18,10 @@ dependencies = [
     "sqlite-vec>=0.1.6",
     "jieba>=0.42",
     "pyyaml>=6.0",
+    # 升级前的兼容性闸门要判 manifest 的 requires.python（PEP 440 specifier）。它本是
+    # torch/docling 一路带进来的传递依赖，但传递依赖一旦哪天消失，闸门只会**静默不生效**、
+    # 让不兼容的升级过预检——悄悄不工作比报错更糟，所以提为直接依赖。
+    "packaging>=23",
     "flask>=3.0",
     "pydantic>=2.0",
     "markitdown[pdf,docx,pptx]>=0.1",

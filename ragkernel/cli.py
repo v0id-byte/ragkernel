@@ -100,6 +100,149 @@ def cmd_users(args):
         print(f"已启用用户 {args.user_id}")
 
 
+def cmd_version(args):
+    """对标 `docker version` / `kubectl version`——企业支持对话的第一句话。
+    （doctor 是体检，version 是身份证，两者不重叠。）"""
+    import json as _json
+
+    from . import update
+
+    s = update.summary()
+    if args.json:
+        # 给机器的同一份数据：Ansible / CMDB / K8s operator 拿它做资产盘点，
+        # 比让运维正则匹配人读输出可靠得多
+        print(_json.dumps({
+            "version": s["server"]["version"], "commit": s["server"]["commit"],
+            "schema": s["server"]["schema"], "runtime": s["runtime"]["mode"],
+            "channel": s["update"]["channel"], "update_available": s["update"]["available"],
+            "latest": s["update"]["latest"],
+        }, ensure_ascii=False))
+        return
+
+    rows = [("RagKernel", s["server"]["version"]), ("Commit", s["server"]["commit"] or "-"),
+            ("Schema", str(s["server"]["schema"])), ("Runtime", s["runtime"]["mode"]),
+            ("Channel", s["update"]["channel"])]
+    if s["update"]["disabled"]:
+        rows.append(("Update", "检查已关闭"))
+    elif s["update"]["available"]:
+        rows.append(("Update", f"v{s['update']['latest']} 可用"))
+    elif s["update"]["error"]:
+        rows.append(("Update", "无法获取版本清单"))
+    elif not s["update"]["checked_at"]:
+        # summary 只读缓存（绝不联网），全新安装时缓存是空的。此时说「已是最新」是撒谎——
+        # 我们从没查过。这条状态必须和「查过且确实最新」区分开。
+        rows.append(("Update", "尚未检查（ragkernel update）"))
+    else:
+        rows.append(("Update", "已是最新"))
+    for k, v in rows:
+        print(f"{k:<10} {v}")
+
+
+def _print_update_status(st, gate) -> None:
+    print(f"当前版本  {st.current}")
+    print(f"最新版本  {st.latest or '?'}（渠道 {st.channel}）")
+    if st.notes_url:
+        print(f"变更说明  {st.notes_url}")
+    for b in (gate.blockers if gate else []):
+        print(f"  ✗ {b['message']}")
+    for w in (gate.warnings if gate else []):
+        print(f"  ! {w['message']}")
+
+
+def cmd_update(args):
+    """只检查，只读。真正执行是 `ragkernel upgrade`——`update` 一词在 apt/brew 语境里
+    就是「刷新元数据」，让它动代码会违反肌肉记忆。"""
+    from . import update
+
+    st = update.check(force=True)
+    if st.disabled:
+        print("版本检查已在配置中关闭（update.check=false）。")
+        return
+    if st.error:
+        print(f"无法获取版本清单：{st.error}")
+        sys.exit(1)
+    if not st.available:
+        print(f"已是最新（{st.current}）。")
+        return
+
+    _print_update_status(st, update.can_upgrade(st.manifest))
+    mode = update.runtime_mode()
+    if not update.can_self_update(mode):
+        print(f"\n本实例由 {mode} 管理，请执行：\n  {update.update_command(mode)}")
+    else:
+        print("\n升级：ragkernel upgrade")
+
+
+def cmd_upgrade(args):
+    from . import audit, update
+
+    st = update.check(force=True)
+    if st.error:
+        print(f"无法获取版本清单：{st.error}")
+        return 1
+
+    target = args.to or st.manifest.get("tag") or (f"v{st.latest}" if st.latest else None)
+    gate = update.can_upgrade(st.manifest)
+    strategy = (st.manifest or {}).get("upgrade_strategy") or {}
+
+    _print_update_status(st, gate)
+    if strategy:
+        changes = [n for n, k in (("需要重启", "restart_required"),
+                                  ("需要迁移数据库", "migration_required")) if strategy.get(k)]
+        if changes:
+            print(f"本次升级  {' · '.join(changes)}")
+        if strategy.get("estimated_downtime_seconds"):
+            print(f"预计停机  ~{strategy['estimated_downtime_seconds']} 秒")
+
+    if not gate.allowed:
+        print("\n不能升级（见上）。")
+        return 1
+    if args.dry_run:
+        print("\n--dry-run：未做任何改动。")
+        return 0
+
+    mode = update.runtime_mode()
+    if not update.can_self_update(mode):
+        print(f"\n本实例由 {mode} 管理，不做自更新。请执行：\n  {update.update_command(mode)}")
+        return 1
+    if mode == "process":
+        print("\n注意：升级完成后进程会退出，需要你手动重启（systemd 部署可自动拉起）。")
+    if not args.yes:
+        ans = input(f"\n升级到 {target}？[y/N] ").strip().lower()
+        if ans not in ("y", "yes"):
+            print("已取消。")
+            return 1
+
+    aud = audit.Audit(client="cli")
+    ctl = update.UpdateController(audit_log=aud)
+    try:
+        # 目标版本按 ref 推断，不能一律用渠道 latest：`--to v0.2.0` 而 latest 是 0.3.0 时，
+        # 重启后 recover 会拿 0.2.0 与 0.3.0 比、把成功的升级判成失败并留在维护态。
+        res = ctl.apply(target, to_version=update.expected_version(target),
+                        on_event=lambda e: print(f"  [{e['stage']}] {e['message']}"))
+    except update.UpdateRefused as e:
+        print(f"\n{e}\n  {e.command}")
+        return 1
+    except update.UpdateError as e:
+        print(f"\n升级失败：{e}")
+        print("服务仍处于维护态，需人工确认后再开门。")
+        return 1
+
+    print(f"\n代码已更新到 {target}（update_id {res['update_id']}）。")
+    if res["restart_handled_by"] == "systemd":
+        print("退出进程，交给 systemd 拉起…")
+        sys.exit(0)
+    if res["restart_handled_by"] == "manual-service":
+        # 本进程只是运维敲的 CLI，真正跑旧代码的是那个被管理的服务——不点名的话
+        # 用户很容易以为「升级完了」，而服务还在用内存里的旧代码。
+        print("⚠ 检测到本机由 systemd 管理 ragkernel 服务，但本次升级不是它跑的。")
+        print(f"  代码已换，**服务仍在跑旧代码**，需要重启它才生效：\n  {res['restart_command']}")
+        print("  在此之前服务保持维护态（/api/ask 与 /api/upload 返回 503）。")
+        return 0
+    print(f"请重启进程使其生效：{res['restart_command']}")
+    return 0
+
+
 def cmd_mcp(args):
     import os
 
@@ -188,8 +331,19 @@ def main():
     p.add_argument("--no-models", action="store_true", help="不下载模型")
     p.add_argument("--show-token", action="store_true", help="非交互下也打印完整 token（默认脱敏）")
 
+    p = sub.add_parser("version", help="版本 / commit / schema / 运行形态")
+    p.add_argument("--json", action="store_true", help="机器可读输出（供 CMDB / Ansible 盘点）")
+
+    sub.add_parser("update", help="检查有没有新版本（只读，不改任何东西）")
+
+    p = sub.add_parser("upgrade", help="升级到新版本")
+    p.add_argument("--to", default=None, help="指定目标 ref（默认走渠道最新）")
+    p.add_argument("--dry-run", action="store_true", help="只说明将要发生什么，不做改动")
+    p.add_argument("--yes", action="store_true", help="不询问直接执行")
+
     p = sub.add_parser("doctor", help="环境自查（装完/出问题时跑）")
     p.add_argument("--json", action="store_true", help="机器可读输出（供监控/K8s probe）")
+    p.add_argument("--update", action="store_true", help="强制刷新版本检查后再出报告")
     p.add_argument("--offline", action="store_true", help="跳过所有网络检查")
     p.add_argument("--strict", action="store_true", help="把 warning 也当致命（只改退出码，不改 severity）")
     p.add_argument("--verbose", action="store_true", help="显示主机名、耗时与异常详情")
@@ -251,6 +405,12 @@ def main():
         cmd_mcp(args)
     elif args.cmd == "token":
         cmd_token(args)
+    elif args.cmd == "version":
+        cmd_version(args)
+    elif args.cmd == "update":
+        cmd_update(args)
+    elif args.cmd == "upgrade":
+        sys.exit(cmd_upgrade(args) or 0)
     elif args.cmd == "setup":
         from . import bootstrap
 

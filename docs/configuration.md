@@ -93,7 +93,7 @@ ragkernel setup --with-token       # 顺带签发 MCP agent token
 
 ### 并发
 
-向导启动即对 `.ragkernel/setup.lock` 上文件锁（`flock`），第二个进程拿不到就退出。用文件锁
+向导启动即对 `.ragkernel/locks/setup.lock` 上文件锁（`flock`），第二个进程拿不到就退出。用文件锁
 而非 SQLite 锁——首次安装时 `auth.db` 可能还不存在。
 
 ---

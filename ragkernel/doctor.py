@@ -115,6 +115,23 @@ def _public_check(r: CheckResult, verbose: bool) -> dict:
     return d
 
 
+def _update_info() -> dict:
+    """与 install 段并列的版本上下文。客户把 `doctor --json` 发过来做支持时，
+    版本、渠道、endpoint、上次检查时间就都在里面了，不必再来回问一轮。
+
+    走 cached_status 而非 check：doctor 是只读诊断，渲染报告这一步绝不能联网
+    （--offline 承诺不碰网络）。要不要联网由 checks/update.py 那条检查按 network 标志决定。"""
+    try:
+        from . import update
+
+        st = update.cached_status()
+        return {"current": st.current, "latest": st.latest, "available": st.available,
+                "channel": st.channel, "endpoint": st.endpoint,
+                "checked_at": st.checked_at, "disabled": st.disabled, "error": st.error}
+    except Exception as e:  # noqa: BLE001 —— 诊断输出绝不能因为版本查询而整份失败
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
 def render_json(results: list[CheckResult], policy: HealthPolicy, *, verbose: bool) -> str:
     return json.dumps({
         "schema_version": DIAGNOSTICS_SCHEMA_VERSION,
@@ -122,6 +139,7 @@ def render_json(results: list[CheckResult], policy: HealthPolicy, *, verbose: bo
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "host": _host_info(verbose),
         "install": _installed_at(),
+        "update": _update_info(),
         "summary": {
             "status": policy.evaluate(results),
             "exit_code": policy.exit_code(results),
@@ -132,6 +150,14 @@ def render_json(results: list[CheckResult], policy: HealthPolicy, *, verbose: bo
 
 
 def main(args) -> int:
+    if getattr(args, "update", False) and not args.offline:
+        # 强制刷新版本缓存后再出报告——支持场景里要的是"现在"的结论，不是 6 小时前的。
+        # **但 --offline 一票否决**：air-gap 机器上跑 `doctor --update --offline` 收集
+        # 支持信息是可预期用法，这里发一次 GET 会等满超时，且直接违反 --offline 的契约。
+        from . import update as _update
+
+        _update.check(force=True)
+
     results = diagnostics.run(offline=args.offline)
     policy = HealthPolicy(required=diagnostics.DEFAULT_POLICY.required, strict=args.strict)
 

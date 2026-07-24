@@ -83,6 +83,40 @@ def _force_https():
         return redirect(request.url.replace("http://", "https://", 1), code=301)
 
 
+# 维护窗口里**按方法**判定，不枚举路径：任何写方法都挡，读一律放行。
+#
+# 枚举路径漏过 /api/feedback —— 它会 ingest_record + 立刻嵌入，正是升级期间最不该
+# 启动的那类活。同理 /api/documents/<id>/archive、/admin/api/* 的写接口都得挡。
+# 逐条列举的清单只会随着路由增加而越来越不全，方法判定则自动覆盖后加的路由。
+#
+# 例外只有登录：管理员要能进来看状态。auth 全是轻量 DB 读写，不碰模型与摄取管线。
+_MAINTENANCE_WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+_MAINTENANCE_EXEMPT_PREFIX = "/api/auth/"
+
+
+@app.before_request
+def _maintenance_gate():
+    """升级期间拒绝新的写入与重活；在途请求由 controller 的 drain 等待。
+
+    维护态是**文件**而不是内存标志（见 update.enter_maintenance）：进程重启后内存标志
+    就丢了，而升级恰恰要重启进程——丢在最需要它的时刻。
+    """
+    from . import update
+
+    if request.method not in _MAINTENANCE_WRITE_METHODS:
+        return None   # 读与探针一律放行：运维绝不能在升级时变瞎
+    if request.path.startswith(_MAINTENANCE_EXEMPT_PREFIX):
+        return None
+    mt = update.maintenance()
+    if not mt:
+        return None
+    return jsonify({
+        "error": "maintenance", "reason": mt.get("reason"),
+        "detail": mt.get("detail"), "update_id": mt.get("update_id"),
+        "since": mt.get("started_at"),
+    }), 503
+
+
 @app.get("/")
 def index():
     return send_file(STATIC / "index.html")
@@ -691,10 +725,35 @@ def admin_test_provider():
         return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 400
 
 
+def _startup_lifecycle() -> None:
+    """启动时的生命周期收尾：先恢复升级状态、再处理维护态。顺序有语义，见
+    update.recover_update_state ——只看 pid 就清维护态，可能把半迁移的库直接开门。"""
+    from . import audit, update
+
+    try:
+        outcome = update.recover_update_state(audit_log=audit.log_admin_event)
+    except Exception as e:  # noqa: BLE001 —— 恢复逻辑自身出问题不该让服务起不来
+        print(f"⚠ 升级状态恢复失败：{type(e).__name__}: {e}")
+        return
+
+    if outcome.get("action") == "completed":
+        print(f"✓ 升级完成（update_id {outcome.get('update_id')}）")
+    elif outcome.get("action") == "failed":
+        print(f"✗ 上次升级未完成（update_id {outcome.get('update_id')}，"
+              f"原因 {outcome.get('reason')}）")
+    if outcome.get("maintenance") == "kept":
+        print("⚠ 服务仍处于维护态：/api/ask 与 /api/upload 会返回 503，需人工确认后清除")
+
+    st = update.cached_status()   # 只读缓存，启动不联网、不卡在超时上
+    if st.available:
+        print(f"→ 有新版本 {st.latest}（本机 {st.current}）：ragkernel upgrade")
+
+
 def main():
     import os
 
     config.load_env()
+    _startup_lifecycle()
     web = config.settings().get("web", {})
     host = os.environ.get("RAGKERNEL_HOST") or web.get("host", "127.0.0.1")
     port = int(os.environ.get("RAGKERNEL_PORT") or web.get("port", 8360))
