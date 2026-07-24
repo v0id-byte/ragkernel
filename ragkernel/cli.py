@@ -216,7 +216,9 @@ def cmd_upgrade(args):
     aud = audit.Audit(client="cli")
     ctl = update.UpdateController(audit_log=aud)
     try:
-        res = ctl.apply(target, to_version=st.latest,
+        # 目标版本按 ref 推断，不能一律用渠道 latest：`--to v0.2.0` 而 latest 是 0.3.0 时，
+        # 重启后 recover 会拿 0.2.0 与 0.3.0 比、把成功的升级判成失败并留在维护态。
+        res = ctl.apply(target, to_version=update.expected_version(target),
                         on_event=lambda e: print(f"  [{e['stage']}] {e['message']}"))
     except update.UpdateRefused as e:
         print(f"\n{e}\n  {e.command}")

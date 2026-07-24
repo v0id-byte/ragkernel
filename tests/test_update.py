@@ -237,6 +237,18 @@ def test_check_disabled_by_config(root, monkeypatch):
 # ---------------------------------------------------------------- 启动恢复
 
 
+def _kill_maintenance_pid() -> None:
+    """把维护态记录里的 pid 换成一个不存在的进程。
+
+    真实流程里，写下维护态的那个进程在换完代码后就退出了，恢复逻辑跑在新进程里。
+    测试进程自始至终活着，不伪造的话恢复逻辑会正确地判定「持有者还在」而保持维护态。
+    """
+    p = config.rk_path("state", "maintenance.json")
+    data = json.loads(p.read_text(encoding="utf-8"))
+    data["pid"] = 999999
+    p.write_text(json.dumps(data), encoding="utf-8")
+
+
 def test_recover_completes_when_version_matches(root):
     update.transition("draining", update_id="u_ok", to_version=update.CURRENT)
     update.transition("updating")
@@ -278,11 +290,7 @@ def test_recover_clears_stale_maintenance_from_dead_process(root):
     update.transition("restarting")
     update.enter_maintenance(reason="update", update_id="u_done")
 
-    # 伪造一个不存在的 pid
-    p = config.rk_path("state", "maintenance.json")
-    data = json.loads(p.read_text(encoding="utf-8"))
-    data["pid"] = 999999
-    p.write_text(json.dumps(data), encoding="utf-8")
+    _kill_maintenance_pid()
 
     out = update.recover_update_state()
     assert out["maintenance"] == "cleared"
@@ -529,6 +537,82 @@ def test_managed_unit_is_none_off_linux(root, monkeypatch):
     assert update.managed_unit() is None
 
 
+def test_endpoint_derives_from_channel(root, monkeypatch):
+    """settings.yaml 里的 channel 必须真的起作用，否则它是个死字段——
+    配 prerelease 却还查 stable.json 会让用户以为自己在预发布渠道上。"""
+    assert update.default_endpoint("stable").endswith("/stable.json")
+    assert update.default_endpoint("prerelease").endswith("/prerelease.json")
+
+    monkeypatch.setattr(update, "_cfg", lambda: {"check": True, "channel": "prerelease"})
+    monkeypatch.setattr(update, "_fetch", lambda e, t: (_manifest(), "e"))
+    assert update.check(force=True).endpoint.endswith("/prerelease.json")
+
+
+def test_malformed_requires_section_does_not_crash(root):
+    """顶层守住了不代表里面守住了：{"version":"9.9.9","requires":[]} 是合法对象，
+    但 requires.get() 会抛 AttributeError 逃出 check()。"""
+    m = {"version": "9.9.9", "requires": [], "upgrade_strategy": "nope"}
+    r = update.can_upgrade(m)
+    assert r.allowed          # 没有可判定的约束 → 不拦
+    assert r.warnings == []
+
+
+def test_summary_survives_malformed_manifest(root, monkeypatch):
+    monkeypatch.setattr(update, "cached_status", lambda: update.UpdateStatus(
+        latest="9.9.9", available=True, manifest={"version": "9.9.9", "upgrade_strategy": []}))
+    assert update.summary()["update"]["strategy"] == {}
+
+
+def test_expected_version_prefers_the_explicit_ref(root):
+    """`--to v0.2.0` 而渠道 latest 是 0.3.0 时，按 latest 记录会让重启后的 recover
+    把一次完全成功的安装判成 version_mismatch 并把服务留在维护态。"""
+    assert update.expected_version("v0.2.0") == "0.2.0"
+    assert update.expected_version("v0.3.0") == "0.3.0"
+
+
+def test_expected_version_is_none_for_unparseable_ref(root):
+    """分支名 / commit sha 推不出版本——诚实记 None，不要拿渠道 latest 冒充：
+    回落只在 `--to <分支>` 时才可达，而那恰恰是 latest 一定不对的情况。"""
+    assert update.expected_version("main") is None
+    assert update.expected_version("abc1234") is None
+
+
+def test_recover_completes_unverifiable_upgrade(root):
+    """to_version 为 None 时**没有**版本不符的证据，不能据此判失败——
+    那会把一次成功的升级永久留在维护态。"""
+    update.transition("draining", update_id="u_ref", to_version=None)
+    update.transition("updating")
+    update.transition("restarting")
+    update.enter_maintenance(reason="update", update_id="u_ref")
+    _kill_maintenance_pid()   # 真实流程里换代码的那个进程已经退出
+
+    out = update.recover_update_state()
+    assert out["action"] == "completed" and out["verified"] is False
+    assert update.maintenance() == {}, "无证据判失败 → 不该把服务卡在维护态"
+
+
+def test_local_executor_preserves_installed_python(root, monkeypatch):
+    """install.sh 默认 3.12，不传的话 `--python 3.13` 装的实例会被悄悄降回去——
+    而闸门恰恰按 install.json 里这个值判 requires.python，两边不一致等于白判。"""
+    config.rk_path("state", "install.json", create=True).write_text(
+        json.dumps({"schema_version": 2, "python": "3.13", "extras": []}), encoding="utf-8")
+    (root / "install.sh").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+
+    seen = {}
+
+    class FakeProc:
+        stdout = iter([])
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(update.subprocess, "Popen",
+                        lambda cmd, **kw: (seen.update(cmd=cmd), FakeProc())[1])
+    update.LocalExecutor().apply("v9.9.9", on_event=lambda m: None)
+    assert "--python" in seen["cmd"]
+    assert seen["cmd"][seen["cmd"].index("--python") + 1] == "3.13"
+
+
 def test_apply_refuses_when_another_upgrade_is_in_flight(root, monkeypatch):
     _fake_executor(monkeypatch)
     update.transition("draining", update_id="u_other")
@@ -563,6 +647,100 @@ def test_audit_failure_does_not_break_the_upgrade(root, monkeypatch):
 
     res = update.UpdateController(audit_log=bad_audit).apply("v9.9.9", to_version="9.9.9")
     assert res["restart_required"]
+
+
+# ---------------------------------------------------------------- CLI 接线
+#
+# 这几条不测业务逻辑（上面测过了），只测**接线**：CLI 是升级的主要入口，一个改错的
+# 参数名或漏改的调用点会让整条命令在用户机器上炸，而单测业务函数一个都发现不了。
+
+
+def _upgrade_args(**over):
+    from types import SimpleNamespace
+
+    base = {"to": None, "dry_run": False, "yes": True}
+    base.update(over)
+    return SimpleNamespace(**base)
+
+
+def test_cli_upgrade_wires_through_to_the_controller(root, monkeypatch):
+    from ragkernel import cli
+
+    seen = {}
+
+    class FakeCtl:
+        def __init__(self, **kw):
+            pass
+
+        def apply(self, target, *, to_version=None, on_event=None, drain=None):
+            seen.update(target=target, to_version=to_version)
+            return {"update_id": "u_1", "mode": "process", "restart_required": True,
+                    "restart_handled_by": "manual", "restart_command": "ragkernel serve"}
+
+    monkeypatch.setattr(update, "check", lambda force=False: update.UpdateStatus(
+        latest="9.9.9", available=True, manifest=_manifest(version="9.9.9", tag="v9.9.9")))
+    monkeypatch.setattr(update, "UpdateController", FakeCtl)
+    monkeypatch.setattr(update, "runtime_mode", lambda: "process")
+
+    assert cli.cmd_upgrade(_upgrade_args()) == 0
+    assert seen["target"] == "v9.9.9"
+    assert seen["to_version"] == "9.9.9"
+
+
+def test_cli_upgrade_records_the_explicit_ref_version(root, monkeypatch):
+    """`--to v0.2.0` 而渠道 latest 是 9.9.9：记的必须是 0.2.0。"""
+    from ragkernel import cli
+
+    seen = {}
+
+    class FakeCtl:
+        def __init__(self, **kw):
+            pass
+
+        def apply(self, target, *, to_version=None, on_event=None, drain=None):
+            seen.update(target=target, to_version=to_version)
+            return {"update_id": "u_1", "mode": "process", "restart_required": True,
+                    "restart_handled_by": "manual", "restart_command": "ragkernel serve"}
+
+    monkeypatch.setattr(update, "check", lambda force=False: update.UpdateStatus(
+        latest="9.9.9", available=True, manifest=_manifest(version="9.9.9", tag="v9.9.9")))
+    monkeypatch.setattr(update, "UpdateController", FakeCtl)
+    monkeypatch.setattr(update, "runtime_mode", lambda: "process")
+
+    cli.cmd_upgrade(_upgrade_args(to="v0.2.0"))
+    assert seen["target"] == "v0.2.0"
+    assert seen["to_version"] == "0.2.0"
+
+
+def test_cli_upgrade_refuses_on_docker(root, monkeypatch):
+    from ragkernel import cli
+
+    monkeypatch.setattr(update, "check", lambda force=False: update.UpdateStatus(
+        latest="9.9.9", available=True, manifest=_manifest(version="9.9.9", tag="v9.9.9")))
+    monkeypatch.setattr(update, "runtime_mode", lambda: "docker")
+    monkeypatch.setattr(update, "UpdateController",
+                        lambda **kw: pytest.fail("docker 形态不该走到 controller"))
+    assert cli.cmd_upgrade(_upgrade_args()) == 1
+
+
+def test_cli_upgrade_dry_run_changes_nothing(root, monkeypatch):
+    from ragkernel import cli
+
+    monkeypatch.setattr(update, "check", lambda force=False: update.UpdateStatus(
+        latest="9.9.9", available=True, manifest=_manifest(version="9.9.9", tag="v9.9.9")))
+    monkeypatch.setattr(update, "runtime_mode", lambda: "process")
+    monkeypatch.setattr(update, "UpdateController",
+                        lambda **kw: pytest.fail("--dry-run 不该动任何东西"))
+    assert cli.cmd_upgrade(_upgrade_args(dry_run=True)) == 0
+
+
+def test_cli_version_renders(root, monkeypatch, capsys):
+    from ragkernel import cli
+
+    monkeypatch.setattr(update, "_cfg", lambda: {"check": False})
+    cli.cmd_version(_upgrade_args(json=False))
+    out = capsys.readouterr().out
+    assert "RagKernel" in out and update.CURRENT in out
 
 
 # ---------------------------------------------------------------- capabilities
@@ -755,18 +933,33 @@ def client(root):
     return webapp.app.test_client()
 
 
-def test_maintenance_blocks_heavy_endpoints(client, root):
+@pytest.mark.parametrize("path", ["/api/ask", "/api/upload", "/api/feedback"])
+def test_maintenance_blocks_write_endpoints(client, root, path):
+    """/api/feedback 是枚举路径清单漏掉的那条——它 ingest_record + 立刻嵌入，
+    正是升级换代码时最不该启动的那类活。改成按方法判定后自动覆盖。"""
     update.enter_maintenance(reason="update", update_id="u_1", detail="升级至 v9.9.9")
-    r = client.post("/api/ask", json={})
+    r = client.post(path, json={})
     assert r.status_code == 503
     body = r.get_json()
     assert body["error"] == "maintenance" and body["update_id"] == "u_1"
 
 
-def test_maintenance_keeps_health_and_info_open(client, root):
+def test_maintenance_blocks_admin_writes(client, root):
+    """后台的写接口同样会改库，不能因为「不在清单里」就放过去。"""
+    update.enter_maintenance(reason="update", update_id="u_1")
+    assert client.delete("/admin/api/documents/1").status_code == 503
+
+
+def test_maintenance_keeps_reads_open(client, root):
     """运维与 K8s 探针绝不能在升级窗口里变瞎——那正是最需要它们的时刻。"""
     update.enter_maintenance(reason="update", update_id="u_1")
     assert client.get("/health").status_code == 200
+
+
+def test_maintenance_still_allows_login(client, root):
+    """管理员要能进来看状态。auth 全是轻量 DB 读写，不碰模型与摄取管线。"""
+    update.enter_maintenance(reason="update", update_id="u_1")
+    assert client.post("/api/auth/check-user", json={"username": "x"}).status_code != 503
 
 
 def test_no_maintenance_means_no_interference(client, root):

@@ -34,10 +34,21 @@ from pathlib import Path
 from . import __version__ as CURRENT
 from . import config
 
-# 官方 channel manifest。用自有域名而非 raw.githubusercontent，是为了让托管位置日后可迁移
-# （CDN、镜像、灰度）而不必让每个已装实例改配置——endpoint 一旦散落到成千上万台机器上就改不动了。
+# 官方渠道 manifest，由 GitHub Pages 托管 releases 分支（见 .github/workflows/release.yml）。
+#
+# 选 Pages 而非 raw.githubusercontent 是为了**迁移**：日后把自有域名绑成 Pages 的
+# custom domain 时，*.github.io 的旧地址会 301 到新域名，已装机器不改配置也能继续查到。
+# raw 没有这个重定向能力——endpoint 一旦散落到成千上万台机器上就永远改不动了。
+#
+# 按渠道派生，否则 settings.yaml 里的 `channel` 是个不起作用的死字段。
 # 内网客户把 update.endpoint 指向自家地址即可完全绕开。
-DEFAULT_ENDPOINT = "https://ragkernel.dev/releases/stable.json"
+DEFAULT_ENDPOINT_TEMPLATE = "https://v0id-byte.github.io/ragkernel/releases/{channel}.json"
+
+
+def default_endpoint(channel: str = "stable") -> str:
+    return DEFAULT_ENDPOINT_TEMPLATE.format(channel=channel)
+
+
 _TIMEOUT = 8
 _UA = f"ragkernel/{CURRENT}"
 _MAX_MANIFEST_BYTES = 256 * 1024
@@ -220,8 +231,8 @@ def check(force: bool = False) -> UpdateStatus:
     """查 manifest。**任何失败都不抛**——版本检查坏掉不该影响任何主流程，
     错误只落进缓存的 error 字段，UI 据此静默不显示 banner。"""
     cfg = _cfg()
-    endpoint = (cfg.get("endpoint") or "").strip() or DEFAULT_ENDPOINT
     channel = cfg.get("channel", "stable")
+    endpoint = (cfg.get("endpoint") or "").strip() or default_endpoint(channel)
     if cfg.get("check", True) is False or channel == "none":
         return UpdateStatus(channel=channel, endpoint=endpoint, disabled=True)
 
@@ -262,8 +273,8 @@ def cached_status() -> UpdateStatus:
     而启动提示卡在 8 秒超时上是不可接受的。
     """
     cfg = _cfg()
-    endpoint = (cfg.get("endpoint") or "").strip() or DEFAULT_ENDPOINT
     channel = cfg.get("channel", "stable")
+    endpoint = (cfg.get("endpoint") or "").strip() or default_endpoint(channel)
     if cfg.get("check", True) is False or channel == "none":
         return UpdateStatus(channel=channel, endpoint=endpoint, disabled=True)
     cache = _cache_read()
@@ -311,6 +322,33 @@ class UpgradeCheckResult:
         return "；".join(b["message"] for b in self.blockers)
 
 
+def section(manifest: dict, key: str) -> dict:
+    """取 manifest 的子对象，不是 dict 就当空。
+
+    顶层守住了不代表里面守住了：`{"version":"9.9.9","requires":[]}` 是合法 JSON 对象，
+    但 `requires.get()` 会抛 AttributeError 逃出 check()，把非致命的版本检查变成
+    `ragkernel update` 直接崩溃。畸形 manifest 的结果应当是「查不到更新」，不是崩。
+    """
+    v = manifest.get(key)
+    return v if isinstance(v, dict) else {}
+
+
+def install_meta() -> dict:
+    """install.sh 留下的安装指纹（extras / python / commit …）。读不到就空。
+
+    闸门与执行层**必须读同一份**：闸门按这里的 python 判 requires.python，执行层就得把
+    同一个值传回 install.sh，否则判的和装的不是一回事。
+    """
+    p = config.rk_read_path("state", "install.json")
+    if p is None:
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def _install_python() -> str:
     """升级实际会用哪个 Python。
 
@@ -318,15 +356,7 @@ def _install_python() -> str:
     install.json 里。判定必须针对**将要装的**目标，否则 3.12 装机在 requires >=3.13 时
     仍会通过预检，然后进维护态、再在 uv sync 里失败——正是闸门要避免的路径。
     """
-    p = config.rk_read_path("state", "install.json")
-    if p is not None:
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-            if isinstance(data, dict) and data.get("python"):
-                return str(data["python"])
-        except (OSError, json.JSONDecodeError):
-            pass
-    return platform.python_version()
+    return str(install_meta().get("python") or platform.python_version())
 
 
 def _python_blocker(spec: str | None) -> dict | None:
@@ -368,7 +398,7 @@ def can_upgrade(manifest: dict) -> UpgradeCheckResult:
         blockers.append({"type": "version", "current": CURRENT, "required": latest,
                          "message": f"已是最新（本机 {CURRENT}，清单 {latest}）"})
 
-    req = manifest.get("requires") or {}
+    req = section(manifest, "requires")
 
     py_blocker = _python_blocker(req.get("python"))
     if py_blocker:
@@ -386,7 +416,7 @@ def can_upgrade(manifest: dict) -> UpgradeCheckResult:
         blockers.append({"type": "min_upgradable_from", "current": CURRENT, "required": floor,
                          "message": f"本机 {CURRENT} 过旧，需先升到 {floor} 及以上"})
 
-    strategy = manifest.get("upgrade_strategy") or {}
+    strategy = section(manifest, "upgrade_strategy")
     if strategy.get("migration_required"):
         warnings.append({"type": "migration", "message": "本次升级会迁移数据库，建议先备份 data/"})
     if manifest.get("security") == "critical":
@@ -450,6 +480,21 @@ def transition(new: str, **fields) -> dict:
     st["schema_version"] = 1
     _atomic_write(config.rk_path("state", "update.json", create=True), st)
     return st
+
+
+def expected_version(target: str) -> str | None:
+    """升级后**应该**看到的版本，只从 ref 本身推断；推不出返回 None。
+
+    `--to v0.2.0` 装一个非渠道最新的 ref 时，若按渠道 latest（比如 0.3.0）记录，
+    重启后 recover 会拿 0.2.0 与 0.3.0 比、把一次完全成功的安装判成 version_mismatch
+    并把服务留在维护态。
+
+    **刻意不回落到渠道 latest**：不带 --to 时 target 就是 manifest 的 tag（能解析、
+    结果等于 latest），所以回落只在「--to 指了个分支名或 commit」时才可达——
+    而那恰恰是 latest 一定不对的情况。推不出就诚实记 None，让 recover 走
+    「无法核对但也无失败证据」的分支。
+    """
+    return str(target).lstrip("v") if parse_version(target) else None
 
 
 def new_update_id() -> str:
@@ -535,9 +580,17 @@ def recover_update_state(*, audit_log=None) -> dict:
     outcome: dict = {}
 
     if state == "restarting":
-        if st.get("to_version") and st["to_version"] == CURRENT:
+        if st.get("to_version") is None:
+            # 目标版本无从推断（--to 指向分支名或 commit sha）。此时**没有**版本不符的
+            # 证据，不能据此判失败——那会把一次成功的升级留在维护态。记为完成但标注
+            # 未经版本核对，留痕给支持排查。
             st = transition("completed", finished_at=_now(), error=None)
-            outcome = {"action": "completed", "update_id": st.get("update_id")}
+            outcome = {"action": "completed", "update_id": st.get("update_id"),
+                       "verified": False}
+        elif st["to_version"] == CURRENT:
+            st = transition("completed", finished_at=_now(), error=None)
+            outcome = {"action": "completed", "update_id": st.get("update_id"),
+                       "verified": True}
         else:
             # 换代码没生效：进程起来了，跑的还是老版本
             st = transition("failed", finished_at=_now(),
@@ -588,24 +641,21 @@ class LocalExecutor(UpdateExecutor):
     """调仓库内的 install.sh。**不重写 git/uv 逻辑**——浅克隆加深、脏工作区、
     tag/commit 分流、CAD extra、刷新 install.json 指纹都已在里面处理过。"""
 
-    def _extras(self) -> list[str]:
-        p = config.rk_read_path("state", "install.json")
-        if p is None:
-            return []
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return []
-        got = data.get("extras") if isinstance(data, dict) else None
-        return got if isinstance(got, list) else []
-
     def apply(self, target: str, *, on_event) -> dict:
         script = config.ROOT / "install.sh"
         if not script.exists():
             raise UpdateError(f"找不到 {script}——手动安装（非 install.sh）暂不支持自更新")
 
         cmd = ["sh", str(script), "--update", "--ref", target, "--dir", str(config.ROOT)]
-        extras = self._extras()
+
+        meta = install_meta()
+        # 装机时选的 Python 必须原样传回去：install.sh 的默认是 3.12，不传的话
+        # `--python 3.13` 装的实例会在升级时被悄悄降回 3.12——而闸门恰恰是按
+        # install.json 里这个值判 requires.python 的，两边不一致等于闸门判了个寂寞。
+        if meta.get("python"):
+            cmd += ["--python", str(meta["python"])]
+
+        extras = meta.get("extras") or []
         if "cad" in extras:
             # 不回读 extras 的话，升级会悄悄把 CAD extra 卸掉
             cmd.append("--cad")
@@ -775,7 +825,7 @@ def summary() -> dict:
     st = cached_status()
     state = read_state()
     gate = can_upgrade(st.manifest) if st.manifest else None
-    strategy = (st.manifest.get("upgrade_strategy") or {}) if st.manifest else {}
+    strategy = section(st.manifest, "upgrade_strategy")
     return {
         "server": {"version": CURRENT, "commit": _commit(), "schema": config.SCHEMA_VERSION},
         "update": {

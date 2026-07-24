@@ -83,22 +83,29 @@ def _force_https():
         return redirect(request.url.replace("http://", "https://", 1), code=301)
 
 
-# 维护窗口里挡掉的**只有**这两条重活。用「拦截清单」而不是「放行清单」：
-# /health、静态资源、以及将来的只读信息端点全都默认放行——**运维与探针绝不能在升级时
-# 变瞎**，那正是最需要它们的时刻。反过来写（默认拦、列白名单）迟早会漏掉某个探针路径。
-_MAINTENANCE_BLOCK = ("/api/ask", "/api/upload")
+# 维护窗口里**按方法**判定，不枚举路径：任何写方法都挡，读一律放行。
+#
+# 枚举路径漏过 /api/feedback —— 它会 ingest_record + 立刻嵌入，正是升级期间最不该
+# 启动的那类活。同理 /api/documents/<id>/archive、/admin/api/* 的写接口都得挡。
+# 逐条列举的清单只会随着路由增加而越来越不全，方法判定则自动覆盖后加的路由。
+#
+# 例外只有登录：管理员要能进来看状态。auth 全是轻量 DB 读写，不碰模型与摄取管线。
+_MAINTENANCE_WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+_MAINTENANCE_EXEMPT_PREFIX = "/api/auth/"
 
 
 @app.before_request
 def _maintenance_gate():
-    """升级期间拒绝新的重活；在途请求由 controller 的 drain 等待。
+    """升级期间拒绝新的写入与重活；在途请求由 controller 的 drain 等待。
 
     维护态是**文件**而不是内存标志（见 update.enter_maintenance）：进程重启后内存标志
     就丢了，而升级恰恰要重启进程——丢在最需要它的时刻。
     """
     from . import update
 
-    if request.path not in _MAINTENANCE_BLOCK:
+    if request.method not in _MAINTENANCE_WRITE_METHODS:
+        return None   # 读与探针一律放行：运维绝不能在升级时变瞎
+    if request.path.startswith(_MAINTENANCE_EXEMPT_PREFIX):
         return None
     mt = update.maintenance()
     if not mt:
